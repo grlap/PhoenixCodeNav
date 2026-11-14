@@ -1,0 +1,53 @@
+{
+  "id": "01a068a3-9270-7391-842d-92596a1687ef",
+  "external_ref": null,
+  "title": "Keep every Phoenix CLI failure inside the documented JSON and exit-code contract",
+  "outcome": "Every CLI failure emits exactly one JSON object and uses the documented exit class without leaking a stack trace.",
+  "acceptance": [
+    "Invalid workspace-root and index-db inputs produce bad_request exit 2, while exit 3 remains daemon unavailability.",
+    "Unexpected non-shutdown exceptions produce one honest failure object and a documented exit code."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "bug",
+  "priority": 2,
+  "labels": [
+    "agent-experience",
+    "cli",
+    "mcp-contract",
+    "review"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "completed",
+  "parent_id": "01a06819-d56e-7e42-99e2-d6c75600a4c8",
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": {
+    "summary": "Delivered in commit eee9ee5 as part of the reviewed Phoenix CLI changeset.",
+    "completed_at": "2026-09-03T21:34:22.006572800Z",
+    "actor": {
+      "actor_id": "termal",
+      "actor_kind": "agent"
+    }
+  },
+  "activity": {
+    "central": {
+      "1b9332ac1d82e8c460906e532c3fd70e63630e7aa690f91f54c2406fbef5e6ad": {
+        "activity_id": "1b9332ac1d82e8c460906e532c3fd70e63630e7aa690f91f54c2406fbef5e6ad",
+        "task_id": "01a068a3-9270-7391-842d-92596a1687ef",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "termal",
+          "actor_kind": "agent"
+        },
+        "state": "finished",
+        "state_revision": 2,
+        "event_id": "5138e43d0e81e8a8c6aa03dbe88293c8ae4150ea3ebdc059ce2d69f007a088a9"
+      }
+    }
+  }
+}

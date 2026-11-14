@@ -1,0 +1,53 @@
+{
+  "id": "01a08758-4f4c-7a31-befa-0e05473a2359",
+  "external_ref": null,
+  "title": "Preserve live owner-verified startup refusal during session recovery",
+  "outcome": "Preserve live owner-verified startup refusal during session recovery",
+  "acceptance": [
+    "ConcurrentWaiterReusesExactWriterRefusalWithoutRespawning passes unchanged: exact writer refusal, actionable recovery and same status bytes; no respawn."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "bug",
+  "priority": 1,
+  "labels": [
+    "agent-experience",
+    "daemon",
+    "mcp-contract",
+    "recovery",
+    "testing"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "completed",
+  "parent_id": "01a08735-5bf6-7463-a954-43e838d04c76",
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": {
+    "summary": "Exact live-owner writer refusal retained only after connection attempt; report changes/removal reread, successful connection wins over old advisory report without rewriting bytes. Original unchanged ConcurrentWaiterReusesExactWriterRefusalWithoutRespawning and report-order tests pass in full1756/0/2; dual review CLEAN.",
+    "completed_at": "2026-09-09T18:59:37.240279500Z",
+    "actor": {
+      "actor_id": "greg/codex",
+      "actor_kind": "agent"
+    }
+  },
+  "activity": {
+    "central": {
+      "f620c9f674653f86653fdfab4e66d1814c9e48847b7c396c6ef6e411c3f512c9": {
+        "activity_id": "f620c9f674653f86653fdfab4e66d1814c9e48847b7c396c6ef6e411c3f512c9",
+        "task_id": "01a08758-4f4c-7a31-befa-0e05473a2359",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "greg/codex",
+          "actor_kind": "agent"
+        },
+        "state": "finished",
+        "state_revision": 2,
+        "event_id": "abcfea4404dd6150a323ddebb8a21e30940ae83c85a5dab5bd4c1ae298170304"
+      }
+    }
+  }
+}

@@ -1,0 +1,65 @@
+{
+  "id": "01a063dd-d753-7582-8c80-0349c7226b38",
+  "external_ref": null,
+  "title": "Make review_pack affectedPaths report its effective bound",
+  "outcome": "affectedPaths disclosureLimit and disclosureBytes describe the sampler that actually governs returned paths, and tests pin the exact result.",
+  "acceptance": [
+    "The 40-path product fixture asserts exact returned count, total, truncation, and effective disclosureLimit.",
+    "The sampler enforces the disclosed path bound rather than an undisclosed internal cap."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "bug",
+  "priority": 2,
+  "labels": [
+    "agent-experience",
+    "mcp-contract",
+    "review",
+    "testing"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "completed",
+  "parent_id": "01a063dd-8a58-74e3-a1df-5e9f1c4572d5",
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": {
+    "summary": "Delivered honest bounded review_pack affectedPaths disclosure.",
+    "completed_at": "2026-09-04T15:48:48.483297200Z",
+    "actor": {
+      "actor_id": "greg/codex",
+      "actor_kind": "agent"
+    }
+  },
+  "activity": {
+    "central": {
+      "9bf219dfeebf286b5dd39361085dba69e6f178d5030dcf2015d7e1589dd01279": {
+        "activity_id": "9bf219dfeebf286b5dd39361085dba69e6f178d5030dcf2015d7e1589dd01279",
+        "task_id": "01a063dd-d753-7582-8c80-0349c7226b38",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "greg/codex",
+          "actor_kind": "agent"
+        },
+        "state": "finished",
+        "state_revision": 2,
+        "event_id": "9a99be790f1fb0f50963397ed4615c4a4a9c3a1444d8481f02af5cfedbbeaf93"
+      },
+      "e0f8127d543696003515266c69472b9c919aa5188cd4fb1fe13872745beaeade": {
+        "activity_id": "e0f8127d543696003515266c69472b9c919aa5188cd4fb1fe13872745beaeade",
+        "task_id": "01a063dd-d753-7582-8c80-0349c7226b38",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "fable",
+          "actor_kind": "agent"
+        },
+        "state": "released",
+        "state_revision": 2,
+        "event_id": "9d24b7a779bafaaa3704893d5c575b03ace57284c4f8a8e6e37ed0d33c8da902"
+      }
+    }
+  }
+}

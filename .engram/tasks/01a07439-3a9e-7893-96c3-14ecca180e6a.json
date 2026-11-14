@@ -1,0 +1,50 @@
+{
+  "id": "01a07439-3a9e-7893-96c3-14ecca180e6a",
+  "external_ref": null,
+  "title": "Preserve oversized F# implementation target identities",
+  "outcome": "Preserve oversized F# implementation target identities",
+  "acceptance": [
+    "A valid oversized F# target identity is preserved intact with accurate responseBudget metadata instead of being replaced by fsharp_semantic_response_too_large."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "bug",
+  "priority": 1,
+  "labels": [
+    "mcp-contract",
+    "review"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "completed",
+  "parent_id": "01a063dd-575c-7d71-917c-0aeafcd5bd73",
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": {
+    "summary": "Oversized valid F# implementation identities now use the measured indivisible-identity exception.",
+    "completed_at": "2026-09-06T01:25:05.960936300Z",
+    "actor": {
+      "actor_id": "greg/codex",
+      "actor_kind": "agent"
+    }
+  },
+  "activity": {
+    "central": {
+      "c9d4d16f42e130510c582bba974057b304cec91864e14302be682e864a7aac06": {
+        "activity_id": "c9d4d16f42e130510c582bba974057b304cec91864e14302be682e864a7aac06",
+        "task_id": "01a07439-3a9e-7893-96c3-14ecca180e6a",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "greg/codex",
+          "actor_kind": "agent"
+        },
+        "state": "finished",
+        "state_revision": 2,
+        "event_id": "65577a41d8c227e183d270ad633eca4cf2e253e9592691737933a0eb52e9dac7"
+      }
+    }
+  }
+}

@@ -1,0 +1,77 @@
+{
+  "id": "01a063dd-abc4-7b62-b727-a9317dea0b45",
+  "external_ref": null,
+  "title": "Disclose lower-precedence project selector matches",
+  "outcome": "When project-file-stem precedence shadows an AssemblyName match, agents can see the shadowed candidates instead of receiving a silently exact-looking answer.",
+  "acceptance": [
+    "A selector matching both a project-file stem and AssemblyName resolves by documented precedence and includes bounded alsoMatched evidence.",
+    "The Project.File collision fixture decisively asserts the chosen row and the shadowed physical row."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "bug",
+  "priority": 2,
+  "labels": [
+    "agent-experience",
+    "mcp-contract",
+    "navigation",
+    "review"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "completed",
+  "parent_id": "01a063dd-84ee-78b2-be90-a2b82477e5de",
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": {
+    "summary": "Closed shadowed project-selector evidence coverage in fdcd442.",
+    "completed_at": "2026-09-04T17:06:49.669964200Z",
+    "actor": {
+      "actor_id": "greg/codex",
+      "actor_kind": "agent"
+    }
+  },
+  "activity": {
+    "central": {
+      "2c00f40d486ce0be41841041febb03b4e62ab78b95adf71c218e35fc3a4284df": {
+        "activity_id": "2c00f40d486ce0be41841041febb03b4e62ab78b95adf71c218e35fc3a4284df",
+        "task_id": "01a063dd-abc4-7b62-b727-a9317dea0b45",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "greg/codex",
+          "actor_kind": "agent"
+        },
+        "state": "finished",
+        "state_revision": 2,
+        "event_id": "a0582f587660dc1d1a478274142f142628051b79ca60af98c843b88c101de791"
+      },
+      "7a1a3c947c480a0d4a74f7b64cffb5106a4f22c85ba8899661dffbaf21ef5a69": {
+        "activity_id": "7a1a3c947c480a0d4a74f7b64cffb5106a4f22c85ba8899661dffbaf21ef5a69",
+        "task_id": "01a063dd-abc4-7b62-b727-a9317dea0b45",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "greg/codex",
+          "actor_kind": "agent"
+        },
+        "state": "started",
+        "state_revision": 1,
+        "event_id": "7a1a3c947c480a0d4a74f7b64cffb5106a4f22c85ba8899661dffbaf21ef5a69"
+      },
+      "bfe7ccc215bef487670a7bfee86688c9542103387b2477f67743b76c548db754": {
+        "activity_id": "bfe7ccc215bef487670a7bfee86688c9542103387b2477f67743b76c548db754",
+        "task_id": "01a063dd-abc4-7b62-b727-a9317dea0b45",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "fable",
+          "actor_kind": "agent"
+        },
+        "state": "released",
+        "state_revision": 2,
+        "event_id": "b83f62942e53b85472a2330c5dc34676b4948a82ce71a616622d0bcb46dbf8bd"
+      }
+    }
+  }
+}

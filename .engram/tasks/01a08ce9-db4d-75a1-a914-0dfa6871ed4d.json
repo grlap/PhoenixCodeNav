@@ -1,0 +1,52 @@
+{
+  "id": "01a08ce9-db4d-75a1-a914-0dfa6871ed4d",
+  "external_ref": null,
+  "title": "Refresh README for current project models and replace monolith terminology with monorepo",
+  "outcome": "Refresh README for current project models and replace monolith terminology with monorepo",
+  "acceptance": [
+    "First-party tracked repository terminology and synthetic test input use monorepo instead of monolith; unrelated edits and external dependencies remain untouched.",
+    "README describes current default simple and opt-in evaluated project models without contradictory package/count/import claims and retains usable MCP/CLI setup.",
+    "Run proportionate validation and report changes without commit or push."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "task",
+  "priority": 2,
+  "labels": [
+    "documentation",
+    "monorepo"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "completed",
+  "parent_id": null,
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": {
+    "summary": "Updated README for current Simple/Evaluated F# behavior, package/count/diagnostic boundaries and publishing; replaced all three first-party monolith occurrences with monorepo.",
+    "completed_at": "2026-09-10T20:06:54.341144800Z",
+    "actor": {
+      "actor_id": "greg/codex",
+      "actor_kind": "agent"
+    }
+  },
+  "activity": {
+    "central": {
+      "0c8ce2b72ce651c4e34740e0bfa3b4ebe1ef2253f15439ede05c2a65c6337598": {
+        "activity_id": "0c8ce2b72ce651c4e34740e0bfa3b4ebe1ef2253f15439ede05c2a65c6337598",
+        "task_id": "01a08ce9-db4d-75a1-a914-0dfa6871ed4d",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "greg/codex",
+          "actor_kind": "agent"
+        },
+        "state": "finished",
+        "state_revision": 2,
+        "event_id": "4fdcf03765248975e7e7ca47d703005d12e6b8046727cb6a16e6dd5608a43f3e"
+      }
+    }
+  }
+}

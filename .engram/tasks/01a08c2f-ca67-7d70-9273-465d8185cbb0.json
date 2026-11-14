@@ -1,0 +1,53 @@
+{
+  "id": "01a08c2f-ca67-7d70-9273-465d8185cbb0",
+  "external_ref": null,
+  "title": "Propagate selected project model through sibling index publication",
+  "outcome": "Propagate selected project model through sibling index publication",
+  "acceptance": [
+    "WorktreeSeedRecapturesRootSensitiveExistsWithNoProjectChanges passes through an evaluated IndexManager.EnsureWorktreeIndex, preserves main pinned facts, and sibling readiness/probes reflect its own root."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "bug",
+  "priority": 2,
+  "labels": [
+    "default",
+    "fsharp",
+    "indexing",
+    "project-model",
+    "semantic"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "completed",
+  "parent_id": "01a08c08-cb5e-7b42-a5e0-1f02de81511c",
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": {
+    "summary": "Delivered in051cbc2 and pushed toorigin/main: required explicitmodel propagation through manager-owned sibling publication/reconciliation/retries. Decisive red/green preserved; final359GitTests pass includes main/sibling readiness and pinned root-sensitive facts through IndexManager.EnsureWorktreeIndex. Both originalreviewers CLEAN on full49pathunion.",
+    "completed_at": "2026-09-10T17:33:28.647628Z",
+    "actor": {
+      "actor_id": "greg/codex",
+      "actor_kind": "agent"
+    }
+  },
+  "activity": {
+    "central": {
+      "f3c1fd2d32bbd90f98b7bdff941b8fc3d8a7aed4b4d379bf95fee870e7c6c4a0": {
+        "activity_id": "f3c1fd2d32bbd90f98b7bdff941b8fc3d8a7aed4b4d379bf95fee870e7c6c4a0",
+        "task_id": "01a08c2f-ca67-7d70-9273-465d8185cbb0",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "greg/codex",
+          "actor_kind": "agent"
+        },
+        "state": "finished",
+        "state_revision": 2,
+        "event_id": "3898009a9f9cdfe6b7de1dc7b2ee62ec6a5d28796b20924aaf6c18f8c0cca5a5"
+      }
+    }
+  }
+}

@@ -1,0 +1,28 @@
+{
+  "id": "01a06a63-50a5-7ed1-9973-ef398b3c3753",
+  "external_ref": null,
+  "title": "Clarify Phoenix skill shell-search boundary direction",
+  "outcome": "The skill trigger unambiguously prefers Phoenix inside its supported boundary and authorizes shell search only under the documented fallback conditions.",
+  "acceptance": [
+    "The wording stays synchronized with the canonical fallback guidance and passes the skill validator plus required review gates.",
+    "skills/phoenix/SKILL.md frontmatter and opening paragraph cannot be read as authorizing shell search inside Phoenix's supported coverage while withholding it outside that coverage."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "bug",
+  "priority": 2,
+  "labels": [
+    "mcp-contract",
+    "review"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "open",
+  "parent_id": "01a06a00-8b2d-7ab0-bbbf-b4dd387126dc",
+  "child_requirement": "optional",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": null
+}

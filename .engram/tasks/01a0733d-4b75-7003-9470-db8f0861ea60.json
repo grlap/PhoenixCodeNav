@@ -1,0 +1,49 @@
+{
+  "id": "01a0733d-4b75-7003-9470-db8f0861ea60",
+  "external_ref": null,
+  "title": "Restore the circular gold black-hole hero",
+  "outcome": "Restore the circular gold black-hole hero",
+  "acceptance": [
+    "Preserve the simplified page, README CLI improvements, existing motion accessibility and unrelated worktree changes.",
+    "Restore the previous large circular black hole with tight gold ring and denser narrow foreground particles; remove tilted pink disk and cyan jet.",
+    "Website verification and representative desktop/mobile visual checks pass; no staging, commit or push."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "task",
+  "priority": 1,
+  "labels": [],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "completed",
+  "parent_id": null,
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": {
+    "summary": "Restored the previous large circular gold black hole and tight particle ring while retaining the simplified page and CLI documentation.",
+    "completed_at": "2026-09-05T20:27:12.343489300Z",
+    "actor": {
+      "actor_id": "greg/codex",
+      "actor_kind": "agent"
+    }
+  },
+  "activity": {
+    "central": {
+      "4acea3981659895a0cfe3cd41daed5ed3097bd23bbc1f8f3940753626a032129": {
+        "activity_id": "4acea3981659895a0cfe3cd41daed5ed3097bd23bbc1f8f3940753626a032129",
+        "task_id": "01a0733d-4b75-7003-9470-db8f0861ea60",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "greg/codex",
+          "actor_kind": "agent"
+        },
+        "state": "finished",
+        "state_revision": 2,
+        "event_id": "f47b623021cc081598debd5703804d783226c4854e85fbb4b7b31d83f37abcd0"
+      }
+    }
+  }
+}

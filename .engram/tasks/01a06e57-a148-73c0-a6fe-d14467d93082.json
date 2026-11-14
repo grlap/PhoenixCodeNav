@@ -1,0 +1,50 @@
+{
+  "id": "01a06e57-a148-73c0-a6fe-d14467d93082",
+  "external_ref": null,
+  "title": "Omit semanticColdStart when no timing phase was published",
+  "outcome": "Unresolved-target responses omit semanticColdStart instead of emitting an undocumented empty object.",
+  "acceptance": [
+    "A regression for the target_not_found_in_index path asserts semanticColdStart is absent when no timing publication occurred."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "bug",
+  "priority": 3,
+  "labels": [
+    "mcp-contract",
+    "review"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "completed",
+  "parent_id": "01a063dd-5ecb-7000-814f-7cc52012253b",
+  "child_requirement": "optional",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": {
+    "summary": "Made unpublished timing snapshots absent instead of empty.",
+    "completed_at": "2026-09-05T00:03:14.315697600Z",
+    "actor": {
+      "actor_id": "greg/codex",
+      "actor_kind": "agent"
+    }
+  },
+  "activity": {
+    "central": {
+      "b4ff8bc033f36ce5a8321cbae3c225666a455cc0d7665b2f64135fd23ebd0fc8": {
+        "activity_id": "b4ff8bc033f36ce5a8321cbae3c225666a455cc0d7665b2f64135fd23ebd0fc8",
+        "task_id": "01a06e57-a148-73c0-a6fe-d14467d93082",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "greg/codex",
+          "actor_kind": "agent"
+        },
+        "state": "finished",
+        "state_revision": 2,
+        "event_id": "663c9e50636afb6b7c1de96013eba2ccc81ca97bcea316c465872978decbc5b0"
+      }
+    }
+  }
+}

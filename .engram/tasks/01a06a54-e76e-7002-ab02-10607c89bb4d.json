@@ -1,0 +1,53 @@
+{
+  "id": "01a06a54-e76e-7002-ab02-10607c89bb4d",
+  "external_ref": null,
+  "title": "Align MCP initialize instructions with config_lookup and symbol_at routing",
+  "outcome": "The live MCP initialize instructions route literals/non-symbol text to search_text, configuration keys to config_lookup, and stack traces/build errors/diff hunks through symbol_at.",
+  "acceptance": [
+    "McpApplication.Instructions assigns configuration keys to config_lookup and literals, messages, comments, and non-symbol text to search_text.",
+    "McpApplication.Instructions routes stack traces, build errors, and diff hunks through symbol_at(path, line).",
+    "The later product changeset bumps BuildInfo.Version, updates its contract tests, passes all required gates, and is independently reviewed."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "task",
+  "priority": 2,
+  "labels": [
+    "agent-experience",
+    "mcp-contract",
+    "review"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "completed",
+  "parent_id": null,
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": {
+    "summary": "Aligned MCP initialize instructions with config_lookup, search_text fallback, symbol_at routing, and the typed cold-start recovery contract.",
+    "completed_at": "2026-09-04T05:10:18.249620200Z",
+    "actor": {
+      "actor_id": "termal",
+      "actor_kind": "agent"
+    }
+  },
+  "activity": {
+    "central": {
+      "ba4a40bd8606deed9ec0de8203c50d90293c45f9368ac2395ae4bdb9a3875423": {
+        "activity_id": "ba4a40bd8606deed9ec0de8203c50d90293c45f9368ac2395ae4bdb9a3875423",
+        "task_id": "01a06a54-e76e-7002-ab02-10607c89bb4d",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "termal",
+          "actor_kind": "agent"
+        },
+        "state": "finished",
+        "state_revision": 2,
+        "event_id": "e48e3c71923389e27df3a388b7f9f4d9a7efe1462769667995e7f3b6655c6569"
+      }
+    }
+  }
+}

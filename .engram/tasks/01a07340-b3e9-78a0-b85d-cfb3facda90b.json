@@ -1,0 +1,28 @@
+{
+  "id": "01a07340-b3e9-78a0-b85d-cfb3facda90b",
+  "external_ref": null,
+  "title": "Apply host case rules to missing canonical destination segments",
+  "outcome": "Canonical daemon destination identity remains stable across parent creation on case-insensitive non-Windows filesystems.",
+  "acceptance": [
+    "On a case-insensitive non-Windows filesystem, the same explicitly mis-cased --index-db spelling derives one destination key before and after its parent is created, or the on-disk-casing requirement is explicitly documented and contract-tested."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "bug",
+  "priority": 3,
+  "labels": [
+    "architecture",
+    "daemon",
+    "review"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "open",
+  "parent_id": null,
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": null
+}

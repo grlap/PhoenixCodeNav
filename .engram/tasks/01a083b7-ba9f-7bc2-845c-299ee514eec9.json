@@ -1,0 +1,55 @@
+{
+  "id": "01a083b7-ba9f-7bc2-845c-299ee514eec9",
+  "external_ref": null,
+  "title": "Resolve imported F# Exists conditions from the project directory",
+  "outcome": "Resolve imported F# Exists conditions from the project directory",
+  "acceptance": [
+    "A native-MSBuild comparison and F# regression for ancestor Directory.Build.props and case-varied explicit imports prove missing/present/removal in the project directory; unsafe paths remain unknown."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "bug",
+  "priority": 1,
+  "labels": [
+    "architecture",
+    "csharp",
+    "fsharp",
+    "msbuild",
+    "review",
+    "semantic",
+    "semantic-correctness"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "completed",
+  "parent_id": "01a08395-4315-7a03-8dfa-9c66434a9eb6",
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": {
+    "summary": "Both imported Exists Highs resolved by project-relative normalization and shared evaluator capture. ImportedExistsUsesProjectDirectoryAcrossAppearanceAndRemoval both RED before/GREEN after; original reviewers6484/6485 verified fixed. Committed 9cd8aa9. Final same-session dual review CLEAN; full solution1587/0, Release0warnings/errors, MCP47/0, website167/167. No numeric limit changes.",
+    "completed_at": "2026-09-09T01:39:03.369567100Z",
+    "actor": {
+      "actor_id": "greg/codex",
+      "actor_kind": "agent"
+    }
+  },
+  "activity": {
+    "central": {
+      "85d72528a55d9e2504cb80a0916d61c710f6fc9d237ec46d131f583e560cb0a6": {
+        "activity_id": "85d72528a55d9e2504cb80a0916d61c710f6fc9d237ec46d131f583e560cb0a6",
+        "task_id": "01a083b7-ba9f-7bc2-845c-299ee514eec9",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "greg/codex",
+          "actor_kind": "agent"
+        },
+        "state": "finished",
+        "state_revision": 2,
+        "event_id": "896b31935ff60987b43167c6e16e50f593827c2b03d21a344f18056d7d3df779"
+      }
+    }
+  }
+}

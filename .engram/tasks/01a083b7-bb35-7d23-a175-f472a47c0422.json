@@ -1,0 +1,56 @@
+{
+  "id": "01a083b7-bb35-7d23-a175-f472a47c0422",
+  "external_ref": null,
+  "title": "Avoid the files-table scan for incremental Exists source discovery",
+  "outcome": "Avoid the files-table scan for incremental Exists source discovery",
+  "acceptance": [
+    "Ordinary non-project edits use indexed source/dependency lookup rather than enumerating every files row; source edits and detect-all still refresh correctly."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "task",
+  "priority": 2,
+  "labels": [
+    "architecture",
+    "csharp",
+    "fsharp",
+    "indexing",
+    "msbuild",
+    "review",
+    "semantic",
+    "semantic-correctness"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "completed",
+  "parent_id": "01a08395-4315-7a03-8dfa-9c66434a9eb6",
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": {
+    "summary": "Deleted wildcard files-table discovery. Ordinary deltas reobserve retained targets and select affected owners; project/import edits conservatively reevaluate F# owners. Same reviewers verified fixed. Committed 9cd8aa9. Final same-session dual review CLEAN; full solution1587/0, Release0warnings/errors, MCP47/0, website167/167. No numeric limit changes.",
+    "completed_at": "2026-09-09T01:39:04.588527900Z",
+    "actor": {
+      "actor_id": "greg/codex",
+      "actor_kind": "agent"
+    }
+  },
+  "activity": {
+    "central": {
+      "3f03e101ef6bfe31fd12cc9181658c17ea6a50c22f78b3c97838464d958056d3": {
+        "activity_id": "3f03e101ef6bfe31fd12cc9181658c17ea6a50c22f78b3c97838464d958056d3",
+        "task_id": "01a083b7-bb35-7d23-a175-f472a47c0422",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "greg/codex",
+          "actor_kind": "agent"
+        },
+        "state": "finished",
+        "state_revision": 2,
+        "event_id": "50347ec3b2d0108fdf2eefbf641ebd04fab1128706a8e71e32f9fb4c7d69f16b"
+      }
+    }
+  }
+}

@@ -1,0 +1,57 @@
+{
+  "id": "01a08350-89fe-7f22-9e44-a2a813b14229",
+  "external_ref": null,
+  "title": "Align StartsWith design text with the supported allowlist",
+  "outcome": "The design document consistently names both supported property-function shapes and makes only compatibility claims backed by measured MSBuild behavior.",
+  "acceptance": [
+    "StartsWith semantics are documented consistently with the measured MSBuild behavior.",
+    "The later restrictions paragraph no longer says MakeRelative is the sole supported property function."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "task",
+  "priority": 3,
+  "labels": [
+    "architecture",
+    "csharp",
+    "fsharp",
+    "mcp-contract",
+    "msbuild",
+    "review",
+    "semantic",
+    "semantic-correctness"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "completed",
+  "parent_id": "01a08337-0a68-7cf1-bd32-0478506fde2c",
+  "child_requirement": "optional",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": {
+    "summary": "Design text consistently documents the two supported shapes and the measured scalar behavior.",
+    "completed_at": "2026-09-08T23:48:43.140332900Z",
+    "actor": {
+      "actor_id": "greg/codex",
+      "actor_kind": "agent"
+    }
+  },
+  "activity": {
+    "central": {
+      "69da648896b89420ff807796f45a879051ab07c1f075fbadd44934fe20a1a2fb": {
+        "activity_id": "69da648896b89420ff807796f45a879051ab07c1f075fbadd44934fe20a1a2fb",
+        "task_id": "01a08350-89fe-7f22-9e44-a2a813b14229",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "greg/codex",
+          "actor_kind": "agent"
+        },
+        "state": "finished",
+        "state_revision": 2,
+        "event_id": "59c3f11492b3e7fefbfcf0773884fd397c5deca8fd2084ec3d6418f4e4bce6b8"
+      }
+    }
+  }
+}

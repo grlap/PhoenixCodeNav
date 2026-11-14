@@ -1,0 +1,28 @@
+{
+  "id": "01a06acf-75b5-7512-8e8a-9ac298913219",
+  "external_ref": null,
+  "title": "Update the stale cluster_cold_load rationale comment",
+  "outcome": "The SemanticService rationale comment matches the deadline-aware cluster_cold_load retry contract.",
+  "acceptance": [
+    "SemanticService.cs no longer claims that agents should never raise timeoutMs for cluster_cold_load; its comment matches the emitted immediate-retry-then-larger-timeout guidance."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "task",
+  "priority": 3,
+  "labels": [
+    "documentation",
+    "review",
+    "semantic-correctness"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "open",
+  "parent_id": null,
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": null
+}

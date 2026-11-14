@@ -1,0 +1,44 @@
+{
+  "id": "01a063dd-7b2f-78e2-b2cc-385fd932b308",
+  "external_ref": null,
+  "title": "Resolve dual-agent review findings for the Engram migration and test stabilization",
+  "outcome": "The current 34-path changeset satisfies the read-only review contract, retains focused safety coverage without the removed tautological test class, and uses reliable bounded readiness helpers.",
+  "acceptance": [
+    "All Critical and High review findings are fixed and verified by the original Codex and Claude reviewer sessions",
+    "All Medium review findings are fixed or explicitly deferred with owner approval",
+    "The Release build, full solution suite, external MCP harness, and website verifier pass"
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "task",
+  "priority": 1,
+  "labels": [
+    "review"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "open",
+  "parent_id": null,
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": null,
+  "activity": {
+    "central": {
+      "2f7d7106c45029e6327bce3966e9b8db5e0e466150d8cb0d1adad07157f7abd2": {
+        "activity_id": "2f7d7106c45029e6327bce3966e9b8db5e0e466150d8cb0d1adad07157f7abd2",
+        "task_id": "01a063dd-7b2f-78e2-b2cc-385fd932b308",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "fable",
+          "actor_kind": "agent"
+        },
+        "state": "released",
+        "state_revision": 2,
+        "event_id": "b733a8567576b1bc4632eb62cbb94f6bbd0f05378d2093255aea6821526e78a0"
+      }
+    }
+  }
+}

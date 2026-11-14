@@ -1,0 +1,52 @@
+{
+  "id": "01a06e34-e4df-7ad2-8322-d487bf951a04",
+  "external_ref": null,
+  "title": "Make Batch44 ShowFile byte-limit test resilient to suite Git contention",
+  "outcome": "The byte-limit regression keeps exercising the production short bound where it matters while exact large-blob assertions use the repository-approved test process ceiling and remain deterministic under full-suite load.",
+  "acceptance": [
+    "An uninterrupted dotnet test PhoenixCodeNav.sln -c Release --no-build --no-restore run passes.",
+    "ShowFileHonorsSmallBlobByteLimitWithoutReturningAPartialDecode still proves the small cap returns null without a partial decode and proves exact, cap+1, cap-1, and zero-byte boundaries."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "task",
+  "priority": 2,
+  "labels": [
+    "git",
+    "review",
+    "testing"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "completed",
+  "parent_id": "01a063dd-5ecb-7000-814f-7cc52012253b",
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": {
+    "summary": "Hardened Batch44's process-backed large-blob byte-boundary assertions against full-suite Git contention without changing production behavior or the short-timeout/zero-limit coverage.",
+    "completed_at": "2026-09-04T21:19:22.853204700Z",
+    "actor": {
+      "actor_id": "greg/codex",
+      "actor_kind": "agent"
+    }
+  },
+  "activity": {
+    "central": {
+      "4b0c53ee11225a41259fde27f120a9cc3f2ec2d26cc39ef5e608d45121b0425f": {
+        "activity_id": "4b0c53ee11225a41259fde27f120a9cc3f2ec2d26cc39ef5e608d45121b0425f",
+        "task_id": "01a06e34-e4df-7ad2-8322-d487bf951a04",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "greg/codex",
+          "actor_kind": "agent"
+        },
+        "state": "finished",
+        "state_revision": 2,
+        "event_id": "f93325193a0e6de73727df53fb631d6c7c44366582703ec1bb195815a27765f9"
+      }
+    }
+  }
+}

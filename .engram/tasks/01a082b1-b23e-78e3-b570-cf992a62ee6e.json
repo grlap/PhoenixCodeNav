@@ -1,0 +1,32 @@
+{
+  "id": "01a082b1-b23e-78e3-b570-cf992a62ee6e",
+  "external_ref": null,
+  "title": "Return indexed Exists import failures explicitly across the evaluator boundary",
+  "outcome": "Exists evaluation transports its failure cause explicitly instead of depending on mutable parser state.",
+  "acceptance": [
+    "EvaluateExists receives the cause from import resolution as a return value, no longer reads _error, and prefix mapping contains no unreachable branch."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "task",
+  "priority": 3,
+  "labels": [
+    "architecture",
+    "csharp",
+    "fsharp",
+    "msbuild",
+    "review",
+    "semantic",
+    "semantic-correctness"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "open",
+  "parent_id": "01a08298-8f83-78d0-8c70-d2a2cb8c99dc",
+  "child_requirement": "optional",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": null
+}

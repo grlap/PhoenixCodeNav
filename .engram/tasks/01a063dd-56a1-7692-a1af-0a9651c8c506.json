@@ -1,0 +1,74 @@
+{
+  "id": "01a063dd-56a1-7692-a1af-0a9651c8c506",
+  "external_ref": null,
+  "title": "Extend F# semantic references across workspace dependents",
+  "outcome": "Extend F# semantic references across workspace dependents",
+  "acceptance": [
+    "Extend F# semantic references across workspace dependents is done"
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "task",
+  "priority": 1,
+  "labels": [],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "completed",
+  "parent_id": "01a063dd-5401-7f73-a63d-bea317b25710",
+  "child_requirement": "required",
+  "prerequisites": [
+    "01a063dd-599c-7253-999b-3eff45080442",
+    "01a070c5-95e1-7482-8cd1-326c967e5cb4"
+  ],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": {
+    "summary": "Released v0.12.86 F# workspace-dependent semantic references in local commit ec6dba218dfc9f8184a078632aa39fedf96076ab.",
+    "completed_at": "2026-09-05T23:06:38.367821300Z",
+    "actor": {
+      "actor_id": "greg/codex",
+      "actor_kind": "agent"
+    }
+  },
+  "activity": {
+    "central": {
+      "1e71414d78d1791681a09e9561f40cd53401eccee800595bf896fdba23601457": {
+        "activity_id": "1e71414d78d1791681a09e9561f40cd53401eccee800595bf896fdba23601457",
+        "task_id": "01a063dd-56a1-7692-a1af-0a9651c8c506",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "fable",
+          "actor_kind": "agent"
+        },
+        "state": "released",
+        "state_revision": 2,
+        "event_id": "a1d7c90db96c4a5b931a1d6db2832d86a838d378bca4f900e909e6bd8df03dd3"
+      },
+      "4a68d5c25fff563bda3f8e025073612540265c2802b8a757b1c5dbaecc9f6621": {
+        "activity_id": "4a68d5c25fff563bda3f8e025073612540265c2802b8a757b1c5dbaecc9f6621",
+        "task_id": "01a063dd-56a1-7692-a1af-0a9651c8c506",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "greg/codex",
+          "actor_kind": "agent"
+        },
+        "state": "released",
+        "state_revision": 2,
+        "event_id": "da15bf7e47c91993c2a8cdebfb9b541df3d4a1214dc9b40f881b39a6f1ed4e2f"
+      },
+      "ba95f029c535820326d0500e5e6b59586525eb98229f72e34dfe0345ecdd4b99": {
+        "activity_id": "ba95f029c535820326d0500e5e6b59586525eb98229f72e34dfe0345ecdd4b99",
+        "task_id": "01a063dd-56a1-7692-a1af-0a9651c8c506",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "greg/codex",
+          "actor_kind": "agent"
+        },
+        "state": "finished",
+        "state_revision": 2,
+        "event_id": "c05cd2fa42153819942c597db98644a2f82bc9c9b465f8150cac82f8d2ca43e9"
+      }
+    }
+  }
+}

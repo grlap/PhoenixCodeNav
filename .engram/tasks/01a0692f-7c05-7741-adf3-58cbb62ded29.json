@@ -1,0 +1,47 @@
+{
+  "id": "01a0692f-7c05-7741-adf3-58cbb62ded29",
+  "external_ref": null,
+  "title": "Remove the variadic fcntl P/Invoke from DaemonProcessIsolation.PreventParentStreamInheritance (Darwin arm64 ABI hazard)",
+  "outcome": "Unix branch of PreventParentStreamInheritance deleted; design.md sentence kept because Unix redirection severs caller stdout/stderr by construction. Evidence: on Darwin arm64 variadic arguments are passed on the stack, so a fixed-signature fcntl(int,int,int) P/Invoke makes F_SETFD read garbage. Land before any macOS work (see w-023345bfea87).",
+  "acceptance": [
+    "DaemonProcessIsolation has no fcntl P/Invoke; Unix launch relies on RedirectStandardOutput/Error dup2 plus O_CLOEXEC for inheritance severing; Windows keeps SetHandleInformation; cold CLI/daemon launch tests pass on Windows and Linux"
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "bug",
+  "priority": 2,
+  "labels": [],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "completed",
+  "parent_id": null,
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": {
+    "summary": "Removed the unsafe Unix fixed-signature fcntl path while retaining Windows handle isolation.",
+    "completed_at": "2026-09-03T23:58:02.966845Z",
+    "actor": {
+      "actor_id": "termal",
+      "actor_kind": "agent"
+    }
+  },
+  "activity": {
+    "central": {
+      "941673e46e5e9e79fcaaf7181ba67afd95e1e2e11db655efd5a41a67e0ecd33b": {
+        "activity_id": "941673e46e5e9e79fcaaf7181ba67afd95e1e2e11db655efd5a41a67e0ecd33b",
+        "task_id": "01a0692f-7c05-7741-adf3-58cbb62ded29",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "termal",
+          "actor_kind": "agent"
+        },
+        "state": "finished",
+        "state_revision": 2,
+        "event_id": "00b567f211488409bfd6c708d356e45cf2f4a8afbf42ae8ed915234b9d711c0a"
+      }
+    }
+  }
+}

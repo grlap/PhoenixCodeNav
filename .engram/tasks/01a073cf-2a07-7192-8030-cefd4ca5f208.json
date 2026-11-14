@@ -1,0 +1,27 @@
+{
+  "id": "01a073cf-2a07-7192-8030-cefd4ca5f208",
+  "external_ref": null,
+  "title": "Align F# reference pipeline prose with global context deduplication",
+  "outcome": "The design pipeline and capability summary describe request-wide physical-site deduplication across all scanned contexts.",
+  "acceptance": [
+    "docs/design.md uses across-contexts wording consistently and names the selected root, distinct declaring project, and workspace-dependent contexts."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "task",
+  "priority": 3,
+  "labels": [
+    "documentation",
+    "review"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "open",
+  "parent_id": null,
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": null
+}

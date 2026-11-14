@@ -1,0 +1,54 @@
+{
+  "id": "01a092ad-31e7-7e71-b417-2e3b3f5e6bc5",
+  "external_ref": null,
+  "title": "Independent review of the semantic cold-start chain (direction 2) on base e62cd7d",
+  "outcome": "Every packet of the cold-start chain under w-fddc946bf93b is independently verified from original artifacts (design consult, RED/GREEN/mutant evidence, gate logs, raw reviewer packets vs consolidation, byte freezes) and reported to Codex, Advisor and Greg before any commit word; no Git action by this session.",
+  "acceptance": [
+    "Each commit of the chain is verified byte-wise against my freeze and the live remote after Greg's explicit per-changeset word; standing NO PUSH resumes after every push",
+    "Packet 1 (F# cold-start attribution: w-89d0d8974a3d + w-c2101db7acdf + w-480cd3f0ec62) has a design note consulted independently before implementation, then RED/GREEN/mutant evidence and dual review verified from originals",
+    "Packet 2 (measurement: w-c3e84441e0f1 protocol re-baselined on the stated build stamp, w-46c110cb43c2, w-146fe7d0533e) is judged only on medians of five fresh-daemon unprofiled cold/warm pairs, never single runs"
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "task",
+  "priority": 2,
+  "labels": [
+    "cold-start",
+    "coordination",
+    "review",
+    "semantic"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "completed",
+  "parent_id": null,
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": {
+    "summary": "Packet 1 of the cold-start chain (F# semantic attribution, v0.12.109, 27 paths on base e62cd7d) independently verified end to end and accepted: design consult (Advisor #326/#328/#330) with my source baseline; implementation evidence (exact fixture + telemetry, stdio fixture with honest indexed, portal boundary test; 4 original + 3 corrective mutants each failing exactly the intended assertions, sources restored byte-for-byte); gates on the final bytes from originals (build 0/0, format 0 of 310, suite 2230/0/2, MCP 48/0 run af4a4e75… gitlinks==heads server 0.12.109@e62cd7d, website 167); manifest measured independently by re-running the same compiled seam (63,484 B at a 6-digit PID vs 63,483 at 5 digits — runtime.processId is the only difference; reserve 2048 holds); freezes packet1 (23:57Z) and packet1c (00:32Z) taken and matched to Codex's source-before/after; review round 1 (Codex 6717 / Claude 6718: CLEAN by threshold with 2 Medium + 2 Low; consolidated INCONCLUSIVE for Claude's incomplete Phase 1) → one corrective round in-packet (manifest untruth fixed and re-pinned; per-tool required phase sets; unresolved/error coverage; sequential-span invariant documented) → same-child follow-ups CLEAN with no findings → Claude attempt 3 Bash-only Phase 1 executed first-try in order, closing the procedural gap literally; final-handoff.json verified against the embedded verbatim packets (no spawns, no gates during completion, live bytes = freeze, no hashes). Final acceptance sent to Advisor; publication awaits Greg's per-changeset word; Engram items open pending publication with done-with-hash order recorded. Greg's STOP (via Advisor #336): packets 2-4 not started; no further Phoenix work.",
+    "completed_at": "2026-09-12T01:04:08.972421Z",
+    "actor": {
+      "actor_id": "greg/claude",
+      "actor_kind": "agent"
+    }
+  },
+  "activity": {
+    "central": {
+      "710c6e9090a8c1333e40d97d10feb6b44e3397d16bdf45d4795d31354da9aa68": {
+        "activity_id": "710c6e9090a8c1333e40d97d10feb6b44e3397d16bdf45d4795d31354da9aa68",
+        "task_id": "01a092ad-31e7-7e71-b417-2e3b3f5e6bc5",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "greg/claude",
+          "actor_kind": "agent"
+        },
+        "state": "finished",
+        "state_revision": 2,
+        "event_id": "8241279803fa143802cac7a8578aa851e3312ca35d652101aa5d0116503bdfcc"
+      }
+    }
+  }
+}

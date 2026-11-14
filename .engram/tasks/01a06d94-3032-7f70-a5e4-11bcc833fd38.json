@@ -1,0 +1,52 @@
+{
+  "id": "01a06d94-3032-7f70-a5e4-11bcc833fd38",
+  "external_ref": null,
+  "title": "Center the website hero around the black hole",
+  "outcome": "The opening hero uses the black hole as its central focal point with readable supporting text arranged around it across desktop and mobile.",
+  "acceptance": [
+    "Desktop hero centers the black-hole atlas and composes headline, explanation, and actions around it without overlap",
+    "Narrow layouts preserve clear reading order and avoid horizontal overflow",
+    "Website verification and required repository quality gates pass"
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "task",
+  "priority": 1,
+  "labels": [
+    "design",
+    "website"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "completed",
+  "parent_id": null,
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": {
+    "summary": "Redesigned the opening hero around a larger centered black hole, curved the desktop headline and supporting copy around it, preserved a clear compact/mobile reading order, and added verifier coverage for the layout and canvas geometry.",
+    "completed_at": "2026-09-04T18:35:15.642939800Z",
+    "actor": {
+      "actor_id": "greg/codex",
+      "actor_kind": "agent"
+    }
+  },
+  "activity": {
+    "central": {
+      "b0d6fe1c433dfa4233cdbc5c67c7697d1efb203b94fac59d0ea64f51aa9305a3": {
+        "activity_id": "b0d6fe1c433dfa4233cdbc5c67c7697d1efb203b94fac59d0ea64f51aa9305a3",
+        "task_id": "01a06d94-3032-7f70-a5e4-11bcc833fd38",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "greg/codex",
+          "actor_kind": "agent"
+        },
+        "state": "finished",
+        "state_revision": 2,
+        "event_id": "59c5040c4613ab3b1e4b5fe2055157a1a18d6518bfa75cbcc969be14dc73de51"
+      }
+    }
+  }
+}

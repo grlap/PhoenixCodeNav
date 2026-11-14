@@ -1,0 +1,24 @@
+{
+  "id": "01a06f49-60f6-7f43-815d-7e108694ec3e",
+  "external_ref": null,
+  "title": "Hypothesis: pre-parse syntax trees in parallel off the compilation critical path",
+  "outcome": "Evidence from the 9ce4c26 RavenDB profile (w-418276aea485 note, trace C:\\Temp\\PhoenixGcPauseProfile-20260905-02): sampled CPU inside GetCompilationAsync is 68.2% parsing, 17.1% GC, 5.6% metadata import, 1.8% declaration table, <0.1% binding; preparation is chain-bound (criticalPath 1285.8 ~ waveMaxSum 1286.4 ~ total 1295.9 ms, effective concurrency 4 of 8 lanes), so the lever is per-project busy time. Test: materialize syntax trees for all loaded projects in parallel during or right after source capture (bounded by existing lanes), then re-measure compilationPreparation busySumMs/criticalPathMs and semanticColdStart.compilationMs on the same command; no product limit introduced or lowered.",
+  "acceptance": [
+    "Hypothesis: pre-parse syntax trees in parallel off the compilation critical path is done"
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "research",
+  "priority": 1,
+  "labels": [],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "open",
+  "parent_id": "01a063dd-5e2a-7431-bd00-c1d34e0ba396",
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": null
+}

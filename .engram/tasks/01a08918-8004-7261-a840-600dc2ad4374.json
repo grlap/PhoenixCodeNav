@@ -1,0 +1,54 @@
+{
+  "id": "01a08918-8004-7261-a840-600dc2ad4374",
+  "external_ref": null,
+  "title": "Keep partial-reason visibility explicit for both F# confidence classes",
+  "outcome": "The compacted confidence-authority summary explicitly preserves visibility of partial reasons on both exact and indexed responses.",
+  "acceptance": [
+    "The before/after evidence checklist names both confidence classes, and measured capability size plus the required gates pass without changing numeric limits or growth-margin thresholds.",
+    "The fsharp-semantic-confidence-authority summary explicitly states that partial reasons remain visible for both exact and indexed confidence, preserving the pre-compaction in-either-case qualification."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "task",
+  "priority": 3,
+  "labels": [
+    "fsharp",
+    "mcp-contract",
+    "msbuild",
+    "review",
+    "semantic-correctness"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "completed",
+  "parent_id": "01a088ef-a787-7fe1-9ea2-14952bbf776b",
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": {
+    "summary": "Both original reviewers independently verify restored in-either-case clause against both exact/indexed response shaping and old/new summary claims. Corrected evidence checklist scopes both classes; actual parent margin2058 exceeds unchanged floor2048; final exact UTF8 boundary test passes. First-pass ambiguity was not reported by either reviewer; no runtime removal claimed.",
+    "completed_at": "2026-09-10T02:59:48.272392500Z",
+    "actor": {
+      "actor_id": "greg/codex",
+      "actor_kind": "agent"
+    }
+  },
+  "activity": {
+    "central": {
+      "f7998baf881b835ddeba5153739bcb7d5ca3d3cb78d4e1e1e832ecb2825313e8": {
+        "activity_id": "f7998baf881b835ddeba5153739bcb7d5ca3d3cb78d4e1e1e832ecb2825313e8",
+        "task_id": "01a08918-8004-7261-a840-600dc2ad4374",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "greg/codex",
+          "actor_kind": "agent"
+        },
+        "state": "finished",
+        "state_revision": 2,
+        "event_id": "dc83e2f39b3adc72961a1c14c64f1c154f6b86de36f3d4511a9ef7748d823070"
+      }
+    }
+  }
+}

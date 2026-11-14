@@ -1,0 +1,33 @@
+{
+  "id": "01a07819-84b3-7d12-a641-dc986f12007a",
+  "external_ref": null,
+  "title": "Split the F# semantic engine module into internal concern modules (non-pure)",
+  "outcome": "Replace the monolithic private F# semantic engine with compile-ordered internal concern modules while preserving all public behavior and initialization semantics",
+  "acceptance": [
+    "All mutable state, caches, gates, clocks, runtime factories, nullString through pathComparer, runtimes, createRuntime, assemblyContentsRuntimes, and runtime remain together in one module in their current relative order, with an explicit proof that initialization remains unobservable and unchanged",
+    "Before any edit, Fable and one independent opinion review a design map listing target modules in exact fsproj compile order, every moved binding by current line range, and a proof that no module references a later file",
+    "No logic changes share the packet: moved bodies are byte-identical and every non-moved line is enumerated as a module header, open, or call-site qualification and inspected by both reviewers",
+    "SemanticResolver keeps the same public name, members, and signatures; the contracts file remains byte-identical except for qualified calls required by the split; no InternalsVisibleTo is added; private-to-internal is the only visibility widening and applies only to the new modules",
+    "The full wrapper, F# warning count, external MCP F# canary, Stage2 tests, and dual review are green before clearance and commit; no push occurs without separate Greg authorization"
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "task",
+  "priority": 2,
+  "labels": [
+    "architecture",
+    "fsharp",
+    "maintainability",
+    "structure"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "open",
+  "parent_id": null,
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": null
+}

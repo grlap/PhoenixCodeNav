@@ -1,0 +1,60 @@
+{
+  "id": "01a08871-6a84-7aa1-9265-c202f2be4cd9",
+  "external_ref": null,
+  "title": "Resolve shared MSBuild project and document path properties",
+  "outcome": "C# and F# admitted expressions share correct root-project and current-document path properties. Supported properties resolve from captured path context; known unprovided built-ins are not converted to assumed-empty guards.",
+  "acceptance": [
+    "All applicable derived workspace-relative item/reference/Exists identity columns remain relative; intentional root metadata and original indexed source snapshots are excluded from the no-absolute scan. Existing relocation refusal/explicit-rebuild policy is unchanged. After explicit rebuild, path-independent fixtures remain equivalent and root-sensitive fixtures produce expected different results; pinned-reader and warm-cache behavior is verified. Add a root discriminator only if a failing regression demonstrates the existing identity is insufficient.",
+    "Current-document context follows nested imports and restores on return. Property RHS values capture ThisFile references at assignment in the defining document. Root-reserved and document-reserved classifications are separate, reserved assignments are protected, and ThisFile properties do not enter the global invariant-false proof.",
+    "Design and a singular shared capability entry describe the admitted behavior; version/schema changes cover the complete unshipped batch and numeric budgets remain unchanged. Format, Release build with zero warnings/errors, complete suite, fresh pinned Roslyn/F# MCP integration and website gates pass. Full uncommitted union receives completed dual review; Critical/High findings are fixed and verified by their original reviewers.",
+    "Focused RED/GREEN tests cover both complete families, actual language callers, nested imports and eager capture, spaces/root-level files/host separators/NoRoot, supported and unavailable built-ins, optional/incomplete controls, reserved assignment and invariant-proof boundaries, contained/outside paths, anchored/published roots, and cold/delta Exists capture and retraction.",
+    "One shared Core resolver is used by real admitted C# and F# callers for MSBuildProjectDirectory, MSBuildProjectDirectoryNoRoot, MSBuildProjectFullPath, MSBuildProjectFile, MSBuildProjectName, MSBuildProjectExtension, MSBuildThisFileDirectory, MSBuildThisFileDirectoryNoRoot, MSBuildThisFileFullPath, MSBuildThisFile, MSBuildThisFileName and MSBuildThisFileExtension. Values, filenames, host-root removal and trailing separators are correct without expanding existing C# import/condition admission.",
+    "Published logical workspace root is consistent across cold build, delta and pinned query evaluation and separate from anchored I/O paths. Contained absolute paths normalize to workspace-relative Import, Compile, ProjectReference, HintPath and Exists identities with each consumer's existing relative base; outside-workspace refusal and authority remain intact.",
+    "With valid captured path authority, PropertyGroup guards on MSBuildThisFileDirectory and MSBuildProjectDirectory != empty evaluate true, execute a decisive compiler-affecting assignment such as TOOLING, and emit no assumed-empty reason. Missing required path authority and known unprovided toolchain-dependent properties remain unresolved, not guessed from CWD, environment or Phoenix runtime. Optional user-property guards still distinguish absent, assigned and incomplete values with disclosure."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "bug",
+  "priority": 2,
+  "labels": [
+    "architecture",
+    "csharp",
+    "fsharp",
+    "msbuild",
+    "review",
+    "semantic-correctness"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "completed",
+  "parent_id": null,
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": {
+    "summary": "Shared 12-property MSBuild root/document context delivered for real C#/F# callers, with Private/optional-guard integration, Unix scalar/path provenance and transactional worktree-root Exists publication. Full gates and original Codex/Claude verification CLEAN; five nonblocking followups remain explicitly tracked. No commit/push.",
+    "completed_at": "2026-09-10T00:48:12.367034900Z",
+    "actor": {
+      "actor_id": "greg/codex",
+      "actor_kind": "agent"
+    }
+  },
+  "activity": {
+    "central": {
+      "723ebb71455a8b3c6b1c17dbd662c10e11dde4480d111f89998cdd7051fc1f0a": {
+        "activity_id": "723ebb71455a8b3c6b1c17dbd662c10e11dde4480d111f89998cdd7051fc1f0a",
+        "task_id": "01a08871-6a84-7aa1-9265-c202f2be4cd9",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "greg/codex",
+          "actor_kind": "agent"
+        },
+        "state": "finished",
+        "state_revision": 2,
+        "event_id": "0b3a69cba1d807907e3d3a8777585cee535ffcc7d854c21bbd897fb21e172aec"
+      }
+    }
+  }
+}

@@ -1,0 +1,28 @@
+{
+  "id": "01a06acf-75e0-7920-b61b-179f5db05f44",
+  "external_ref": null,
+  "title": "Document semantic timeout family maxima on every affected MCP tool",
+  "outcome": "Each affected semantic tool description states its documented timeout maximum consistently with the cold-start retry feature summary.",
+  "acceptance": [
+    "All four affected tool timeout descriptions state the applicable family maximum, or the features[] summary stops promising a documented maximum."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "task",
+  "priority": 3,
+  "labels": [
+    "documentation",
+    "mcp-contract",
+    "review"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "open",
+  "parent_id": null,
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": null
+}

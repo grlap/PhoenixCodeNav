@@ -1,0 +1,78 @@
+{
+  "id": "01a063dd-d814-7470-be53-a7809e3773e9",
+  "external_ref": null,
+  "title": "Fix documentationCommentId not-found search retry arguments",
+  "outcome": "The emitted recovery template is directly executable against search_symbol.",
+  "acceptance": [
+    "A product assertion validates the emitted target tool and argument names.",
+    "The retry template uses query, match, and lang—only parameters declared by search_symbol."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "bug",
+  "priority": 2,
+  "labels": [
+    "agent-experience",
+    "mcp-contract",
+    "review",
+    "semantic",
+    "testing"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "completed",
+  "parent_id": "01a063dd-887c-7630-9f20-3e13e01e490b",
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": {
+    "summary": "Closed documentation-ID not-found retry-template coverage in fdcd442.",
+    "completed_at": "2026-09-04T17:06:49.871266700Z",
+    "actor": {
+      "actor_id": "greg/codex",
+      "actor_kind": "agent"
+    }
+  },
+  "activity": {
+    "central": {
+      "099aee88323ca5aa4d1a47e256e13c948d0e21eb5b2f9e2d6d49c15aef1c7c48": {
+        "activity_id": "099aee88323ca5aa4d1a47e256e13c948d0e21eb5b2f9e2d6d49c15aef1c7c48",
+        "task_id": "01a063dd-d814-7470-be53-a7809e3773e9",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "greg/codex",
+          "actor_kind": "agent"
+        },
+        "state": "started",
+        "state_revision": 1,
+        "event_id": "099aee88323ca5aa4d1a47e256e13c948d0e21eb5b2f9e2d6d49c15aef1c7c48"
+      },
+      "125c38ab7d8f857fcd8e1b10cbccab5029c5b9b365b87ff4cdda107518e4943f": {
+        "activity_id": "125c38ab7d8f857fcd8e1b10cbccab5029c5b9b365b87ff4cdda107518e4943f",
+        "task_id": "01a063dd-d814-7470-be53-a7809e3773e9",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "greg/codex",
+          "actor_kind": "agent"
+        },
+        "state": "finished",
+        "state_revision": 2,
+        "event_id": "1a0f30a85674c9ccda4c8bb08abcaeacb420563780aa9264f284d0e493de4814"
+      },
+      "7650d5320978962d85203bdc6dedb4d98544c2e0cc8cf7cd3a3c5fc30edf23e3": {
+        "activity_id": "7650d5320978962d85203bdc6dedb4d98544c2e0cc8cf7cd3a3c5fc30edf23e3",
+        "task_id": "01a063dd-d814-7470-be53-a7809e3773e9",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "fable",
+          "actor_kind": "agent"
+        },
+        "state": "released",
+        "state_revision": 2,
+        "event_id": "1e21961b16d918b05cde52a85486ae63cdf5cb124ea7d35462330f877a14eaba"
+      }
+    }
+  }
+}

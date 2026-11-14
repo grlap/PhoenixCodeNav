@@ -1,0 +1,29 @@
+{
+  "id": "01a07e90-f529-71e1-b6b1-6d93ae4882e4",
+  "external_ref": null,
+  "title": "Give the upstream Roslyn main claim recorded provenance",
+  "outcome": "Give the upstream Roslyn main claim recorded provenance",
+  "acceptance": [
+    "Document line 64 records retrieval method and observed upstream commit, or limits the claim to the linked upstream file at inspection time without conflating pinned checkout, upstream main, and shipping package."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "task",
+  "priority": 3,
+  "labels": [
+    "documentation",
+    "macos",
+    "review",
+    "roslyn"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "open",
+  "parent_id": "01a07e3d-bac1-79d0-adab-a74a1fcce07a",
+  "child_requirement": "optional",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": null
+}

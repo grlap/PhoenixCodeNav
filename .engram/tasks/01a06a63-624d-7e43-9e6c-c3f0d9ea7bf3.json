@@ -1,0 +1,29 @@
+{
+  "id": "01a06a63-624d-7e43-9e6c-c3f0d9ea7bf3",
+  "external_ref": null,
+  "title": "Define Phoenix indexed-text coverage and polyglot fallback in agent guidance",
+  "outcome": "The canonical agent guidance explicitly defines indexed-text coverage and authorizes shell fallback for unsupported languages and content outside that corpus.",
+  "acceptance": [
+    "The change passes the skill validator and all required gates and review.",
+    "The fallback clause explicitly covers unsupported languages and files outside the indexed text corpus without weakening Phoenix-first navigation inside supported coverage.",
+    "docs/agent-instructions.md and skills/phoenix/SKILL.md name the same indexed-text corpus and remain synchronized."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "bug",
+  "priority": 2,
+  "labels": [
+    "mcp-contract",
+    "review"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "open",
+  "parent_id": "01a06a00-8b2d-7ab0-bbbf-b4dd387126dc",
+  "child_requirement": "optional",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": null
+}

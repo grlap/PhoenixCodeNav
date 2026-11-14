@@ -1,0 +1,42 @@
+{
+  "id": "01a06f64-01b1-7513-a28d-4b6aa087636f",
+  "external_ref": null,
+  "title": "Truthful F# semantic confidence: exact only when the checked context carries no partial cause; indexed otherwise",
+  "outcome": "One shared F# semantic response mapper makes symbol_at, definition, and references exact only for a checked context with no partial cause and indexed otherwise",
+  "acceptance": [
+    "A singular features[] entry and README/agent-instructions/SKILL contract accompany Stage2 tests proving exact on a clean SDK-less context and indexed for each partial cause"
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "task",
+  "priority": 1,
+  "labels": [],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "superseded",
+  "parent_id": "01a063dd-5401-7f73-a63d-bea317b25710",
+  "child_requirement": "required",
+  "prerequisites": [
+    "01a063dd-54f4-7d22-8647-caeefe63e36e"
+  ],
+  "blockers": [],
+  "superseded_by": "01a06f9c-dffa-7d91-92bf-2df02b3ce8c1",
+  "disposal_reason": "Duplicate confidence-authority work. The replacement shipped in commit 4bbcc3b, passed the recorded gates and original dual review, and is now completed with Fable #226/#233 evidence.",
+  "completion": null,
+  "activity": {
+    "central": {
+      "1129f6f467130846413d8146d2e9169d30c5d025f8df1841e2121b8360295a17": {
+        "activity_id": "1129f6f467130846413d8146d2e9169d30c5d025f8df1841e2121b8360295a17",
+        "task_id": "01a06f64-01b1-7513-a28d-4b6aa087636f",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "greg/codex",
+          "actor_kind": "agent"
+        },
+        "state": "released",
+        "state_revision": 2,
+        "event_id": "f6d7d5a6ad7393ca72fe91470da5063c09be4f42e190da4070672648517388e8"
+      }
+    }
+  }
+}

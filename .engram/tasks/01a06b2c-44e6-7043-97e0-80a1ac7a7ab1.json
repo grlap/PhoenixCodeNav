@@ -1,0 +1,29 @@
+{
+  "id": "01a06b2c-44e6-7043-97e0-80a1ac7a7ab1",
+  "external_ref": null,
+  "title": "Replace the Core-to-MCP internals grant with a narrow writer-lease probe facade",
+  "outcome": "The MCP daemon can probe writer-lease availability without gaining access to every CodeNav.Core internal.",
+  "acceptance": [
+    "CodeNav.Core exposes a narrow writer-lease probe contract sufficient for daemon retirement",
+    "DaemonRetirement no longer names IndexLeaseAcquireResult in its test seam",
+    "InternalsVisibleTo PhoenixCodeNav.Mcp is removed"
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "task",
+  "priority": 2,
+  "labels": [
+    "architecture",
+    "review"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "superseded",
+  "parent_id": "01a06884-02d0-7041-91b2-f26f6dd69464",
+  "child_requirement": "optional",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": "01a091fc-6a75-7983-8d49-4dde133eb0ba",
+  "disposal_reason": "Continue as independent work. Coordinator-assigned daemon batch after completed parent; preserve acceptance and origin without reopening the parent.",
+  "completion": null
+}

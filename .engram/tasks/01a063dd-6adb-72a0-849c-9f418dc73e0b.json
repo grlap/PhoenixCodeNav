@@ -1,0 +1,56 @@
+{
+  "id": "01a063dd-6adb-72a0-849c-9f418dc73e0b",
+  "external_ref": null,
+  "title": "Compact server_capabilities without hiding feature IDs",
+  "outcome": "The healthy capability handshake remains cheap while status, languages, budgets, confidence semantics, and every stable feature identifier stay directly discoverable.",
+  "acceptance": [
+    "server_capabilities now compacts feature summaries in the healthy path is done"
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "feature",
+  "priority": 1,
+  "labels": [
+    "agent-experience",
+    "mcp-contract",
+    "performance"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "open",
+  "parent_id": null,
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": null,
+  "activity": {
+    "central": {
+      "8a4d8c18d1914ff2e18ba6b61382bb82905806f61e2e10b0b6eff8e9bc68d2d5": {
+        "activity_id": "8a4d8c18d1914ff2e18ba6b61382bb82905806f61e2e10b0b6eff8e9bc68d2d5",
+        "task_id": "01a063dd-6adb-72a0-849c-9f418dc73e0b",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "greg/codex",
+          "actor_kind": "agent"
+        },
+        "state": "released",
+        "state_revision": 2,
+        "event_id": "ae9279c3cd35cf2914628cdd6f8664b2c1fb1f2ba4034ef1dadc3a75dd45c171"
+      },
+      "f8619ad44c86ffd5369a6b066434478f4c38e0424b0d2a2662ef49e01419e71c": {
+        "activity_id": "f8619ad44c86ffd5369a6b066434478f4c38e0424b0d2a2662ef49e01419e71c",
+        "task_id": "01a063dd-6adb-72a0-849c-9f418dc73e0b",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "fable",
+          "actor_kind": "agent"
+        },
+        "state": "released",
+        "state_revision": 2,
+        "event_id": "4030d55275f147ef3fb42b4a364c9c9f41f262641c3274d017fc52145d8371fa"
+      }
+    }
+  }
+}

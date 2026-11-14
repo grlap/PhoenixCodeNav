@@ -1,0 +1,50 @@
+{
+  "id": "01a069b3-c90a-7013-b310-8e38482e3c13",
+  "external_ref": null,
+  "title": "Make the reserved-name test diagnose malformed properties schemas",
+  "outcome": "A non-object properties member fails as an explicit schema contract problem rather than an opaque enumeration exception.",
+  "acceptance": [
+    "The test checks JsonValueKind.Object before enumerating properties and reports a decisive assertion for malformed shapes."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "task",
+  "priority": 3,
+  "labels": [
+    "review",
+    "testing"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "completed",
+  "parent_id": null,
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": {
+    "summary": "The reserved-name schema test now validates that properties is a JSON object before enumeration and emits a tool-specific contract failure.",
+    "completed_at": "2026-09-04T00:22:13.212016700Z",
+    "actor": {
+      "actor_id": "termal",
+      "actor_kind": "agent"
+    }
+  },
+  "activity": {
+    "central": {
+      "a229becb85d0d0e2f1944d3fed896cf20eddccb6057a843349ed5ca0f94be787": {
+        "activity_id": "a229becb85d0d0e2f1944d3fed896cf20eddccb6057a843349ed5ca0f94be787",
+        "task_id": "01a069b3-c90a-7013-b310-8e38482e3c13",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "termal",
+          "actor_kind": "agent"
+        },
+        "state": "finished",
+        "state_revision": 2,
+        "event_id": "54c54b9b5d0d6bbe44941494ce05b4b64fd3d75b959d379f567d785e5788d357"
+      }
+    }
+  }
+}

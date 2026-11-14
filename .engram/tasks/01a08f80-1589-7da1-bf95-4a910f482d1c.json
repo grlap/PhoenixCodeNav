@@ -1,0 +1,52 @@
+{
+  "id": "01a08f80-1589-7da1-bf95-4a910f482d1c",
+  "external_ref": null,
+  "title": "Preserve recovery-shim shutdown status when an in-flight reconnect faults after cancellation",
+  "outcome": "Orderly recovery-shim shutdown cannot be replaced by a late fault from its owned in-flight reconnect attempt.",
+  "acceptance": [
+    "A deterministic connect delegate that throws IOException after lifetime cancellation demonstrates DisposeAsync completing without throwing, and an actual UnavailableMcpShim.RunAsync shutdown regression returns 4 for a never-established session; existing established/lost exit controls and cleanup still pass."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "bug",
+  "priority": 2,
+  "labels": [
+    "daemon",
+    "mcp-contract",
+    "performance",
+    "review"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "completed",
+  "parent_id": null,
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": {
+    "summary": "Preserved orderly recovery-shim shutdown when the owned reconnect faults after cancellation. Deterministic unit and actual RunAsync EOF/token regressions, mutation controls, restored117/117focused and2189/0full-suite validation; fresh Codex6638+Claude6639 full27-path review CLEAN with two separately recorded optional P3 follow-ups. No commit or push.",
+    "completed_at": "2026-09-11T08:58:15.057742300Z",
+    "actor": {
+      "actor_id": "greg/codex",
+      "actor_kind": "agent"
+    }
+  },
+  "activity": {
+    "central": {
+      "98f560722e40c65ec03a25000d3bd5a89305e307b6a7280ad0f3ddc38a927429": {
+        "activity_id": "98f560722e40c65ec03a25000d3bd5a89305e307b6a7280ad0f3ddc38a927429",
+        "task_id": "01a08f80-1589-7da1-bf95-4a910f482d1c",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "greg/codex",
+          "actor_kind": "agent"
+        },
+        "state": "finished",
+        "state_revision": 2,
+        "event_id": "5b3324dddeb182af8aa4d817f95b9346e56db215c9db9de2c48f04294d3d5603"
+      }
+    }
+  }
+}

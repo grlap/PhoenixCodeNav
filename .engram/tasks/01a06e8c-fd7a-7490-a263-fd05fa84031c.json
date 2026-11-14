@@ -1,0 +1,50 @@
+{
+  "id": "01a06e8c-fd7a-7490-a263-fd05fa84031c",
+  "external_ref": null,
+  "title": "Polish the complete PhoenixCodeNav website",
+  "outcome": "A coherent responsive product page from the black-hole hero through examples, proof, FAQ and footer, preserving documented capabilities and readable accessible interactions.",
+  "acceptance": [
+    "Apply the user's ring profile 1.08 + t * 0.01.",
+    "Desktop and mobile content, navigation, copy controls and FAQ remain readable and usable without horizontal clipping.",
+    "Improve visual hierarchy, spacing and section consistency across the full page.",
+    "Website verification and browser checks pass."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "task",
+  "priority": 1,
+  "labels": [],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "completed",
+  "parent_id": null,
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": {
+    "summary": "Polished the full website while preserving the large black-hole hero and requested tight ring profile; improved hierarchy, responsive layouts, code exploration, FAQ, trust diagram, accessibility, and closing CTA.",
+    "completed_at": "2026-09-04T22:50:09.892600400Z",
+    "actor": {
+      "actor_id": "greg/codex",
+      "actor_kind": "agent"
+    }
+  },
+  "activity": {
+    "central": {
+      "5e4840bd91f7c0cd420680518c4776648941db694123722d5f61c4e4895a81e2": {
+        "activity_id": "5e4840bd91f7c0cd420680518c4776648941db694123722d5f61c4e4895a81e2",
+        "task_id": "01a06e8c-fd7a-7490-a263-fd05fa84031c",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "greg/codex",
+          "actor_kind": "agent"
+        },
+        "state": "finished",
+        "state_revision": 2,
+        "event_id": "c2160dee9036082176f6cbb8f18e8f07f1cc952bf8a0f0c36afe7b5cde18c0fb"
+      }
+    }
+  }
+}

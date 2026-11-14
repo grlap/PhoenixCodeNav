@@ -1,0 +1,54 @@
+{
+  "id": "01a0720e-7a49-7622-bfd8-2c69676e99bf",
+  "external_ref": null,
+  "title": "Fail closed for incomplete platform-qualified F# framework reference packs",
+  "outcome": "Platform-qualified F# roots never claim exact semantic authority while only the base Microsoft.NETCore.App reference pack is present.",
+  "acceptance": [
+    "A net8.0-windows F# root either materializes every required platform pack or fails closed before semantic checking.",
+    "The netstandard ProjectReference compatibility regression asserts the disclosed fail-closed outcome for a platform-qualified root."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "bug",
+  "priority": 1,
+  "labels": [
+    "fsharp",
+    "mcp-contract",
+    "review",
+    "semantic",
+    "semantic-correctness"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "completed",
+  "parent_id": "01a070c5-95e1-7482-8cd1-326c967e5cb4",
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": {
+    "summary": "Removed silent base-pack substitution for platform-qualified F# contexts.",
+    "completed_at": "2026-09-05T14:56:14.316983Z",
+    "actor": {
+      "actor_id": "greg/codex",
+      "actor_kind": "agent"
+    }
+  },
+  "activity": {
+    "central": {
+      "3bd138ad7d4aea82dafb2bfb97a04d92dbf35d7a1f86d1a48f56888cd02c6ebe": {
+        "activity_id": "3bd138ad7d4aea82dafb2bfb97a04d92dbf35d7a1f86d1a48f56888cd02c6ebe",
+        "task_id": "01a0720e-7a49-7622-bfd8-2c69676e99bf",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "greg/codex",
+          "actor_kind": "agent"
+        },
+        "state": "finished",
+        "state_revision": 2,
+        "event_id": "00831d353e89aad9538eb689bc5042df5060da3a54cf3df1fe2f4939d8948eb1"
+      }
+    }
+  }
+}

@@ -1,0 +1,28 @@
+{
+  "id": "01a1b69c-07ef-7182-b788-14c5a8eb16db",
+  "external_ref": null,
+  "title": "Restore NETStandard 2.1 reference fixtures without an installed targeting pack",
+  "outcome": "A .NET10-only Linux host can prepare Phoenix's semantic compatibility tests using automatically restored exact reference assets instead of requiring a machine-installed NETStandard2.1 targeting pack.",
+  "acceptance": [
+    "On Linux with .NET SDK10 only and no installed NETStandard.Library.Ref2.1 pack, prerequisite preparation and existing netstandard2.1 semantic/multi-TFM tests pass using normal project-cache restore, preserving exact target references and behavioral assertions."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "bug",
+  "priority": 1,
+  "labels": [
+    "cross-platform",
+    "net10",
+    "testing"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "open",
+  "parent_id": null,
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": null
+}

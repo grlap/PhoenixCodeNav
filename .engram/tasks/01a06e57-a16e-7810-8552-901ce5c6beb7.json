@@ -1,0 +1,50 @@
+{
+  "id": "01a06e57-a16e-7810-8552-901ce5c6beb7",
+  "external_ref": null,
+  "title": "Cover semanticColdStart across every advertised navigation tool",
+  "outcome": "Behavioral tests pin timing.semanticColdStart on exact definition, references, implementations, and type_hierarchy responses.",
+  "acceptance": [
+    "At least one exact response from definition, implementations, and type_hierarchy is asserted to carry semanticColdStart, complementing References coverage."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "task",
+  "priority": 3,
+  "labels": [
+    "review",
+    "testing"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "completed",
+  "parent_id": "01a063dd-5ecb-7000-814f-7cc52012253b",
+  "child_requirement": "optional",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": {
+    "summary": "Covered semanticColdStart on every advertised C# navigation tool.",
+    "completed_at": "2026-09-05T00:03:14.632858500Z",
+    "actor": {
+      "actor_id": "greg/codex",
+      "actor_kind": "agent"
+    }
+  },
+  "activity": {
+    "central": {
+      "b03d99f307a14f8967262cdeee8245ec2bb92824994765f07133a785eb5c9866": {
+        "activity_id": "b03d99f307a14f8967262cdeee8245ec2bb92824994765f07133a785eb5c9866",
+        "task_id": "01a06e57-a16e-7810-8552-901ce5c6beb7",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "greg/codex",
+          "actor_kind": "agent"
+        },
+        "state": "finished",
+        "state_revision": 2,
+        "event_id": "ba2acb1da4da3f5a2d50e5e49a1af5d579e005ff8df52d2b8f2d399b87c2698c"
+      }
+    }
+  }
+}

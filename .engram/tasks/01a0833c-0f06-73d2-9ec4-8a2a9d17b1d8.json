@@ -1,0 +1,57 @@
+{
+  "id": "01a0833c-0f06-73d2-9ec4-8a2a9d17b1d8",
+  "external_ref": null,
+  "title": "Qualify or fix .props Exists absence authority",
+  "outcome": "Qualify or fix .props Exists absence authority",
+  "acceptance": [
+    "Documentation and capability manifest accurately state the indexed authority used for .props Exists absence, or .props missing-row absence is changed to fail closed with decisive excluded/link regression coverage."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "bug",
+  "priority": 2,
+  "labels": [
+    "architecture",
+    "csharp",
+    "fsharp",
+    "index-freshness",
+    "mcp-contract",
+    "msbuild",
+    "review",
+    "semantic",
+    "semantic-correctness"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "completed",
+  "parent_id": null,
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": {
+    "summary": ".props Exists absence authority is explicitly qualified in design and manifest text, preserving behavior while removing the overclaim.",
+    "completed_at": "2026-09-08T23:48:43.596825300Z",
+    "actor": {
+      "actor_id": "greg/codex",
+      "actor_kind": "agent"
+    }
+  },
+  "activity": {
+    "central": {
+      "ea955b07dcbe5318285b36fc01bf2191472706e316ddcd6a1ff720c23a8666d1": {
+        "activity_id": "ea955b07dcbe5318285b36fc01bf2191472706e316ddcd6a1ff720c23a8666d1",
+        "task_id": "01a0833c-0f06-73d2-9ec4-8a2a9d17b1d8",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "greg/codex",
+          "actor_kind": "agent"
+        },
+        "state": "finished",
+        "state_revision": 2,
+        "event_id": "230b4e55ac58f998824d28b6bd95ef4a38126094592179f29ed3e563114a74c4"
+      }
+    }
+  }
+}

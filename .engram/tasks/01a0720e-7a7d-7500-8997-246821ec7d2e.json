@@ -1,0 +1,54 @@
+{
+  "id": "01a0720e-7a7d-7500-8997-246821ec7d2e",
+  "external_ref": null,
+  "title": "Validate netstandard TFMs before reference-pack path probing",
+  "outcome": "Only canonical supported netstandard TFMs can become reference-pack path segments, and probing remains inside the intended pack/package root.",
+  "acceptance": [
+    "A regression pins the closed allowlist and containment behavior.",
+    "Malformed or traversal-like netstandard TFMs fail closed."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "bug",
+  "priority": 2,
+  "labels": [
+    "fsharp",
+    "mcp-contract",
+    "review",
+    "security",
+    "semantic"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "completed",
+  "parent_id": "01a070c5-95e1-7482-8cd1-326c967e5cb4",
+  "child_requirement": "optional",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": {
+    "summary": "Closed netstandard reference-pack probing to canonical supported TFMs.",
+    "completed_at": "2026-09-05T14:57:07.967096500Z",
+    "actor": {
+      "actor_id": "greg/codex",
+      "actor_kind": "agent"
+    }
+  },
+  "activity": {
+    "central": {
+      "7a7f52b31491a5f71f1c8c60e4501e61cec1e08025a1319d4d6bbc7307e6e41c": {
+        "activity_id": "7a7f52b31491a5f71f1c8c60e4501e61cec1e08025a1319d4d6bbc7307e6e41c",
+        "task_id": "01a0720e-7a7d-7500-8997-246821ec7d2e",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "greg/codex",
+          "actor_kind": "agent"
+        },
+        "state": "finished",
+        "state_revision": 2,
+        "event_id": "23a51d5e34130be6dd66084c45ef920e7df39b49ab4e4b59af5a3770f755e152"
+      }
+    }
+  }
+}

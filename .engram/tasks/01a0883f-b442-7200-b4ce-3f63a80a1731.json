@@ -1,0 +1,55 @@
+{
+  "id": "01a0883f-b442-7200-b4ce-3f63a80a1731",
+  "external_ref": null,
+  "title": "Retain capabilities growth margin for copy-local and optional property guards",
+  "outcome": "Retain capabilities growth margin for copy-local and optional property guards",
+  "acceptance": [
+    "CapabilitiesDynamicTextUsesExactUtf8BoundaryAndReportsTruncation passes with unchanged >=2048-byte uncompacted growth margin and unchanged hard budget; both new singular feature IDs retained, existing advertised claims preserved."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "bug",
+  "priority": 1,
+  "labels": [
+    "agent-experience",
+    "architecture",
+    "csharp",
+    "fsharp",
+    "mcp-contract",
+    "msbuild",
+    "semantic-correctness"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "completed",
+  "parent_id": "01a0882a-126b-7f81-8a4b-3f1504bf2d37",
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": {
+    "summary": "Restored the unchanged capabilities growth margin by compacting three summaries with retained-claim assertions; both new feature IDs remain discoverable. Full gates and dual review complete.",
+    "completed_at": "2026-09-09T22:49:31.312314200Z",
+    "actor": {
+      "actor_id": "greg/codex",
+      "actor_kind": "agent"
+    }
+  },
+  "activity": {
+    "central": {
+      "520f0cfc153720806b849cd2f0cb85260ef82324cf4977822de96f3c79c083c1": {
+        "activity_id": "520f0cfc153720806b849cd2f0cb85260ef82324cf4977822de96f3c79c083c1",
+        "task_id": "01a0883f-b442-7200-b4ce-3f63a80a1731",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "greg/codex",
+          "actor_kind": "agent"
+        },
+        "state": "finished",
+        "state_revision": 2,
+        "event_id": "a2f52e6f9ac8bbd84cc107350a2c005ac8dbe457354293ac1e8f7a442f8c5c4f"
+      }
+    }
+  }
+}

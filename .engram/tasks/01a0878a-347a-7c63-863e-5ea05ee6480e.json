@@ -1,0 +1,28 @@
+{
+  "id": "01a0878a-347a-7c63-863e-5ea05ee6480e",
+  "external_ref": null,
+  "title": "Describe MCP initialize rejection accurately in connection-unavailable detail",
+  "outcome": "Describe MCP initialize rejection accurately in connection-unavailable detail",
+  "acceptance": [
+    "Connection-unavailable detail accurately covers both absent response and initialize rejection, with a contract assertion."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "bug",
+  "priority": 3,
+  "labels": [
+    "daemon",
+    "mcp-contract",
+    "review"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "open",
+  "parent_id": null,
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": null
+}

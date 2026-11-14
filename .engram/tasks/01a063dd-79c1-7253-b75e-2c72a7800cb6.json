@@ -1,0 +1,40 @@
+{
+  "id": "01a063dd-79c1-7253-b75e-2c72a7800cb6",
+  "external_ref": null,
+  "title": "Model imported MSBuild friend-assembly authority without a custom evaluator",
+  "outcome": "Model imported MSBuild friend-assembly authority without a custom evaluator",
+  "acceptance": [
+    "Model imported MSBuild friend-assembly authority without a custom evaluator is done"
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "task",
+  "priority": 1,
+  "labels": [],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "open",
+  "parent_id": "01a063dd-7906-7dd3-a2f3-901b1eaec5d6",
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": null,
+  "activity": {
+    "central": {
+      "de79366e29a22b19bdfa5683d78bedbc89cc9bc181404682c02a1786393154cb": {
+        "activity_id": "de79366e29a22b19bdfa5683d78bedbc89cc9bc181404682c02a1786393154cb",
+        "task_id": "01a063dd-79c1-7253-b75e-2c72a7800cb6",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "fable",
+          "actor_kind": "agent"
+        },
+        "state": "released",
+        "state_revision": 2,
+        "event_id": "b9fbdb99b6744c1e252a5c6c38f55b8477b66b087f81d98b9f3d12df0633fe38"
+      }
+    }
+  }
+}

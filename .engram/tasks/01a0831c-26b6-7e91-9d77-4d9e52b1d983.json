@@ -1,0 +1,56 @@
+{
+  "id": "01a0831c-26b6-7e91-9d77-4d9e52b1d983",
+  "external_ref": null,
+  "title": "Pin existence-only inputs in F# semantic fingerprints",
+  "outcome": "Presence dependencies independently change the F# semantic model identity.",
+  "acceptance": [
+    "A focused test holds every other fingerprint input constant and proves that an Exists dependency change alters the fingerprint."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "task",
+  "priority": 2,
+  "labels": [
+    "architecture",
+    "csharp",
+    "fsharp",
+    "index-freshness",
+    "msbuild",
+    "review",
+    "semantic",
+    "testing"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "completed",
+  "parent_id": "01a082f6-d27c-74c1-861e-b692f43dbf1b",
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": {
+    "summary": "Added an isolated fingerprint contract proving ExistsDependencies alone changes F# semantic identity and remains deterministic.",
+    "completed_at": "2026-09-08T22:41:39.811777800Z",
+    "actor": {
+      "actor_id": "greg/codex",
+      "actor_kind": "agent"
+    }
+  },
+  "activity": {
+    "central": {
+      "96de5e093a426f96f4c0ef9996d6016121bb0265b299edc6f8aced50218ca12b": {
+        "activity_id": "96de5e093a426f96f4c0ef9996d6016121bb0265b299edc6f8aced50218ca12b",
+        "task_id": "01a0831c-26b6-7e91-9d77-4d9e52b1d983",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "greg/codex",
+          "actor_kind": "agent"
+        },
+        "state": "finished",
+        "state_revision": 2,
+        "event_id": "d177307086dd468898362e51ea94184b7b4431fdaea101bf5d1e91beb325d157"
+      }
+    }
+  }
+}

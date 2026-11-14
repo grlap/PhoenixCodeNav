@@ -1,0 +1,54 @@
+{
+  "id": "01a06f15-8a4e-7c41-84d6-0a43c29ab03a",
+  "external_ref": null,
+  "title": "Declare and document compilation-preparation GC-pause attribution",
+  "outcome": "The v0.12.79 gcPauseMs telemetry addition is deploy-verifiable through one singular features[] ID and its process-wide interval, units, integer-floor, overlap, and omission semantics are documented.",
+  "acceptance": [
+    "capability tests pin the feature ID, summary content, and version pairing",
+    "docs/features/telemetry.md documents gcPauseMs in the sample, field table, and process-wide measurement guidance",
+    "server_capabilities exposes one singular grep-able feature ID for gcPauseMs compilation-preparation attribution",
+    "the original Codex and Claude reviewer sessions verify the fix with no remaining Critical or High finding"
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "bug",
+  "priority": 1,
+  "labels": [
+    "mcp-contract",
+    "review",
+    "semantic"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "completed",
+  "parent_id": "01a063dd-6110-7153-9100-418276aea485",
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": {
+    "summary": "Declared and documented v0.12.79 GC-pause attribution and closed the dual-review blocker.",
+    "completed_at": "2026-09-05T01:26:15.262551800Z",
+    "actor": {
+      "actor_id": "greg/codex",
+      "actor_kind": "agent"
+    }
+  },
+  "activity": {
+    "central": {
+      "670197a643ef6268091028919a8a09a62622e1baba8d9651b20c07b8500c709c": {
+        "activity_id": "670197a643ef6268091028919a8a09a62622e1baba8d9651b20c07b8500c709c",
+        "task_id": "01a06f15-8a4e-7c41-84d6-0a43c29ab03a",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "greg/codex",
+          "actor_kind": "agent"
+        },
+        "state": "finished",
+        "state_revision": 2,
+        "event_id": "b26010bf11334febc0e28f5b2de8cd5a6dce40de56d3dfd227fcf2b6e91f1bad"
+      }
+    }
+  }
+}

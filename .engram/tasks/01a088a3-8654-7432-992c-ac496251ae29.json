@@ -1,0 +1,27 @@
+{
+  "id": "01a088a3-8654-7432-992c-ac496251ae29",
+  "external_ref": null,
+  "title": "Cover the self-default branch for known-provided MSBuild properties",
+  "outcome": "Cover the self-default branch for known-provided MSBuild properties",
+  "acceptance": [
+    "Decisive tests cover unavailable known-provided properties in canonical self-default and self-expansion, preserving unresolved authority; include ordinary user-property and explicitly assigned controls. Document both the optional nonempty-guard exemption and the canonical self-default exemption explicitly."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "task",
+  "priority": 2,
+  "labels": [
+    "review",
+    "testing"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "open",
+  "parent_id": null,
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": null
+}

@@ -1,0 +1,29 @@
+{
+  "id": "01a07abb-4225-7fc3-b1a9-d4bc7bd7efeb",
+  "external_ref": null,
+  "title": "Disable cross-collection parallelization in CodeNav.WatcherTests",
+  "outcome": "Timing-sensitive watcher tests cannot run concurrently with other heavy collections in the WatcherTests assembly.",
+  "acceptance": [
+    "CodeNav.WatcherTests applies assembly-level CollectionBehavior with DisableTestParallelization enabled",
+    "The complete WatcherTests suite and full repository gate remain green without timing-starvation failures"
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "task",
+  "priority": 2,
+  "labels": [
+    "performance",
+    "review",
+    "testing"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "open",
+  "parent_id": null,
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": null
+}

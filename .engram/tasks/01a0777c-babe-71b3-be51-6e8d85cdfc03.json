@@ -1,0 +1,28 @@
+{
+  "id": "01a0777c-babe-71b3-be51-6e8d85cdfc03",
+  "external_ref": null,
+  "title": "Make cold shared-daemon CLI election reliable under full-suite load",
+  "outcome": "Make cold shared-daemon CLI election reliable under full-suite load",
+  "acceptance": [
+    "Cold concurrent CLI election passes under full-suite load without startup timeout"
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "bug",
+  "priority": 2,
+  "labels": [
+    "concurrency",
+    "review",
+    "testing"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "open",
+  "parent_id": null,
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": null
+}

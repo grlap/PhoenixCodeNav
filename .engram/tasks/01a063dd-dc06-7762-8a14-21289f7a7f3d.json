@@ -1,0 +1,46 @@
+{
+  "id": "01a063dd-dc06-7762-8a14-21289f7a7f3d",
+  "external_ref": null,
+  "title": "Do not widen malformed SplitCsv filters",
+  "outcome": "Malformed list input never becomes a missing filter that returns more results than requested.",
+  "acceptance": [
+    "Product tests cover malformed kinds at each remaining call site.",
+    "SplitCsv callers propagate structured bad_request for malformed input instead of returning null/no-filter."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "bug",
+  "priority": 3,
+  "labels": [
+    "agent-experience",
+    "compatibility",
+    "mcp-contract",
+    "review"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "open",
+  "parent_id": "01a063dd-86a6-70c1-b548-68f810d17b00",
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": null,
+  "activity": {
+    "central": {
+      "96e5b10bee4495e7d79ca7f365ef68ef639e26b15c19c5d8eba101aab91b0743": {
+        "activity_id": "96e5b10bee4495e7d79ca7f365ef68ef639e26b15c19c5d8eba101aab91b0743",
+        "task_id": "01a063dd-dc06-7762-8a14-21289f7a7f3d",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "fable",
+          "actor_kind": "agent"
+        },
+        "state": "released",
+        "state_revision": 2,
+        "event_id": "13d5b2173ec1649d0751d5e876558bb088c37baef12c8e566cdba6bf89bc8452"
+      }
+    }
+  }
+}

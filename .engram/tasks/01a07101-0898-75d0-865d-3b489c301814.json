@@ -1,0 +1,44 @@
+{
+  "id": "01a07101-0898-75d0-865d-3b489c301814",
+  "external_ref": null,
+  "title": "Stop the hero ResizeObserver from observing its own layout mutations",
+  "outcome": "Stop the hero ResizeObserver from observing its own layout mutations",
+  "acceptance": [
+    "Hero resize observation cannot retrigger from layoutOrbitCopy's own custom-property writes."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "bug",
+  "priority": 3,
+  "labels": [
+    "performance",
+    "review",
+    "website"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "superseded",
+  "parent_id": null,
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": "01a07448-11ed-7cc1-82c7-6a0c834a34ca",
+  "disposal_reason": "Duplicate root cause: both items track the hero ResizeObserver observing copy/details while layoutOrbitCopy mutates descendant geometry; Fable designated w-6a0c834a34ca as the canonical deferred root for the website packet.",
+  "completion": null,
+  "activity": {
+    "central": {
+      "3f9893ff610f0717bfe2fd439eb181ebe59b00aa4514e5da141a3f25acdecdb3": {
+        "activity_id": "3f9893ff610f0717bfe2fd439eb181ebe59b00aa4514e5da141a3f25acdecdb3",
+        "task_id": "01a07101-0898-75d0-865d-3b489c301814",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "greg/codex",
+          "actor_kind": "agent"
+        },
+        "state": "abandoned",
+        "state_revision": 2,
+        "event_id": "f80a6573bc7214392f0b0566b14c3e7a05c8293c038047cfedd7fcbb5a8cbd0f"
+      }
+    }
+  }
+}

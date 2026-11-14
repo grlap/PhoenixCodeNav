@@ -1,0 +1,31 @@
+{
+  "id": "01a0913f-10ba-7381-8032-8a5d077dc018",
+  "external_ref": null,
+  "title": "Assert clean real-proxy shutdowns emit no daemon recovery warning",
+  "outcome": "The real-process recovered and never-recovered shutdown controls check their captured stderr as well as exit status, exposing any spurious recovery cleanup warning.",
+  "acceptance": [
+    "Existing real-proxy recovered-clean (exit 0) and never-recovered (exit 4) shutdown cases assert the captured stderr contains no Phoenix warning: daemon recovery line, while still checking their exit codes and retaining process cleanup."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "task",
+  "priority": 3,
+  "labels": [
+    "architecture",
+    "daemon",
+    "mcp-contract",
+    "observability",
+    "review",
+    "testing"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "superseded",
+  "parent_id": "01a0910d-dce0-7440-a1b6-b1ed34981a72",
+  "child_requirement": "optional",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": "01a09140-22ce-7be2-b972-a399b20139e6",
+  "disposal_reason": "Continue as independent work. Created as an optional review child under w-b1ed34981a72 as required by the review workflow; that verified stream-pair fix is now complete. Engram's done/show receipt reports this optional child stranded and explicitly recommends detach. Preserve the creation/origin notes and keep this nonblocking Low follow-up actionable without reopening the satisfied parent.",
+  "completion": null
+}

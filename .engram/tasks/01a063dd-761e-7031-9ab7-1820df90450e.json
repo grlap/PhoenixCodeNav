@@ -1,0 +1,40 @@
+{
+  "id": "01a063dd-761e-7031-9ab7-1820df90450e",
+  "external_ref": null,
+  "title": "Integrate remote website snapshot into current Phoenix history",
+  "outcome": "Integrate remote website snapshot into current Phoenix history",
+  "acceptance": [
+    "Integrate remote website snapshot into current Phoenix history is done"
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "task",
+  "priority": 1,
+  "labels": [],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "open",
+  "parent_id": null,
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": null,
+  "activity": {
+    "central": {
+      "9929a20110b138e3bed5b13e2d29361eb6c91aac7d102200ef8f1a459e777227": {
+        "activity_id": "9929a20110b138e3bed5b13e2d29361eb6c91aac7d102200ef8f1a459e777227",
+        "task_id": "01a063dd-761e-7031-9ab7-1820df90450e",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "fable",
+          "actor_kind": "agent"
+        },
+        "state": "released",
+        "state_revision": 2,
+        "event_id": "6095af02725a22b21e506b22cf8747760f5cc11c682f85b45528859ed9d2181a"
+      }
+    }
+  }
+}

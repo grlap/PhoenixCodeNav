@@ -1,0 +1,52 @@
+{
+  "id": "01a07a6a-336c-7a33-a4e1-fe188a5a69d3",
+  "external_ref": null,
+  "title": "Document strict and tolerant modes in TestWorkspaceCleanup ownership summary",
+  "outcome": "Document strict and tolerant modes in TestWorkspaceCleanup ownership summary",
+  "acceptance": [
+    "The TestWorkspaceCleanup class summary accurately distinguishes best-effort cleanup from decisive strict deletion and states when each is appropriate."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "task",
+  "priority": 3,
+  "labels": [
+    "documentation",
+    "infrastructure",
+    "review",
+    "testing"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "completed",
+  "parent_id": "01a078ae-bdca-7b30-a846-3887ea1da0de",
+  "child_requirement": "optional",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": {
+    "summary": "Updated TestWorkspaceCleanup's class ownership summary to distinguish decisive one-pass cleanup for Phoenix-owned index artifacts from tolerant best-effort cleanup for repositories, worktrees, and source roots.",
+    "completed_at": "2026-09-07T06:03:47.847826600Z",
+    "actor": {
+      "actor_id": "greg/codex",
+      "actor_kind": "agent"
+    }
+  },
+  "activity": {
+    "central": {
+      "26b06fe30dfe634e647ee8edd3df9226533bb857d1ff9d9f1a3a029c296e2b27": {
+        "activity_id": "26b06fe30dfe634e647ee8edd3df9226533bb857d1ff9d9f1a3a029c296e2b27",
+        "task_id": "01a07a6a-336c-7a33-a4e1-fe188a5a69d3",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "greg/codex",
+          "actor_kind": "agent"
+        },
+        "state": "finished",
+        "state_revision": 2,
+        "event_id": "649b5c876a73df861bc2b1011922fb27920be946f376ba8d13fafac07e87b4b8"
+      }
+    }
+  }
+}

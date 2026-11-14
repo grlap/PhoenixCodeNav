@@ -1,0 +1,54 @@
+{
+  "id": "01a06a95-4ad4-7bf0-8778-fa8d5237267d",
+  "external_ref": null,
+  "title": "Classify index not-ready retries from the actual availability condition",
+  "outcome": "Classify index not-ready retries from the actual availability condition",
+  "acceptance": [
+    "A follower observing a writer rebuild emits retryRecommended:true with a progress retryHint and self-recovers when the writer becomes ready.",
+    "A non-queryable writer publication boundary with state ready is retryable, while a genuinely terminal writer failure remains non-retryable.",
+    "Tests bind the retry classifier to every IndexManager state and exercise reachable not-ready envelopes."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "bug",
+  "priority": 1,
+  "labels": [
+    "index-freshness",
+    "mcp-contract",
+    "review",
+    "testing"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "completed",
+  "parent_id": "01a06999-065c-7ef3-97f9-6bc6a6d1436d",
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": {
+    "summary": "Index not-ready retryability now uses actual access mode and availability conditions; real follower rebuild/recovery coverage verifies transient retry guidance.",
+    "completed_at": "2026-09-04T05:09:32.855392300Z",
+    "actor": {
+      "actor_id": "termal",
+      "actor_kind": "agent"
+    }
+  },
+  "activity": {
+    "central": {
+      "bc66a9763ac32154117fa7e0dcf4c6576511c822d7cc79512f7ecc6ad2e2f4d3": {
+        "activity_id": "bc66a9763ac32154117fa7e0dcf4c6576511c822d7cc79512f7ecc6ad2e2f4d3",
+        "task_id": "01a06a95-4ad4-7bf0-8778-fa8d5237267d",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "termal",
+          "actor_kind": "agent"
+        },
+        "state": "finished",
+        "state_revision": 2,
+        "event_id": "443908624548f9f23fc6ef215643dc2d061c4b1ec19d822a54a9620e771793c4"
+      }
+    }
+  }
+}

@@ -1,0 +1,29 @@
+{
+  "id": "01a084fb-55fe-70b0-8906-377cdea40620",
+  "external_ref": null,
+  "title": "Make CompleteAnalysisContext test exercise the real seeded context",
+  "outcome": "Make CompleteAnalysisContext test exercise the real seeded context",
+  "acceptance": [
+    "Use real parser seeding for the regression, or remove redundant manual-dictionary coverage while retaining decisive early-import regressions."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "task",
+  "priority": 3,
+  "labels": [
+    "fsharp",
+    "review",
+    "semantic-correctness",
+    "testing"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "open",
+  "parent_id": "01a084da-3f35-7b71-942e-9b0449437a74",
+  "child_requirement": "optional",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": null
+}

@@ -1,0 +1,30 @@
+{
+  "id": "01a07329-c625-7a62-9bbb-cba34bd47155",
+  "external_ref": null,
+  "title": "Give harness retirement the daemon legacy-destination bridge",
+  "outcome": "Harness retirement can replace a pre-v0.12.85 daemon without weakening destination authority.",
+  "acceptance": [
+    "On a destination-mismatch refusal from an older daemon, harness retirement retries only with the daemon-returned destination key or explicitly documents and tests a same-version-only contract."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "bug",
+  "priority": 3,
+  "labels": [
+    "architecture",
+    "daemon",
+    "mcp-contract",
+    "review",
+    "windows"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "open",
+  "parent_id": "01a072be-3cbf-7900-8086-ffa06c2a8671",
+  "child_requirement": "optional",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": null
+}

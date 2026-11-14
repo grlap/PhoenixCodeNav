@@ -1,0 +1,55 @@
+{
+  "id": "01a08395-4315-7a03-8dfa-9c66434a9eb6",
+  "external_ref": null,
+  "title": "Evaluate genuinely missing F# Exists files as false",
+  "outcome": "Evaluate genuinely missing F# Exists files as false",
+  "acceptance": [
+    "A real indexed-workspace regression proves missing Web.config evaluates false without semantic error, present evaluates true, and refresh handles both transitions.",
+    "Unprovable skipped paths do not become false absence; no limits change."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "bug",
+  "priority": 1,
+  "labels": [
+    "architecture",
+    "csharp",
+    "fsharp",
+    "msbuild",
+    "semantic",
+    "semantic-correctness"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "completed",
+  "parent_id": "01a08298-8fc2-7781-90fb-e9d128515475",
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": {
+    "summary": "Delivered commit9cd8aa9, version0.12.94/schema32: writer captures owning-project/TFM concrete Exists facts with pinned presence AND genuine absence; no missing-row guess. Missing Web.config evaluates false without Error, creation true, removal false, imported ancestor/case-varied paths project-relative. Unsafe/excluded states remain unknown; numeric limits unchanged. Decisive RED-before/GREEN-after tests plus full solution1587/0(2expected skips), Release0warnings/errors, MCP47/0, website167/167. Original Codex6484 and Claude6485 final same-session full-union reviews CLEAN; two optional Lows deferred. Local Release available, no push.",
+    "completed_at": "2026-09-09T01:39:32.401830800Z",
+    "actor": {
+      "actor_id": "greg/codex",
+      "actor_kind": "agent"
+    }
+  },
+  "activity": {
+    "central": {
+      "5c611c061c3cf3f061580d93bed381df20a87ec1671f13af1414b11381dd180e": {
+        "activity_id": "5c611c061c3cf3f061580d93bed381df20a87ec1671f13af1414b11381dd180e",
+        "task_id": "01a08395-4315-7a03-8dfa-9c66434a9eb6",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "greg/codex",
+          "actor_kind": "agent"
+        },
+        "state": "finished",
+        "state_revision": 2,
+        "event_id": "109a69fb63ff4e2202ca892a91a3642f49722d9f24f01624e6bae06b9cf557ed"
+      }
+    }
+  }
+}

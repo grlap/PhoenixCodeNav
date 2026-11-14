@@ -1,0 +1,28 @@
+{
+  "id": "01a0773d-17a2-73d3-b70f-87c52f1124eb",
+  "external_ref": null,
+  "title": "Pin hierarchy to the unsupported half of the F# boundary summary",
+  "outcome": "The capability contract test fails if F# hierarchy is ever described on the supported side of the boundary summary.",
+  "acceptance": [
+    "Batch4SearchGradingTests asserts hierarchy is present in unsupportedFSharpBoundary and absent from supportedFSharpBoundary."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "task",
+  "priority": 3,
+  "labels": [
+    "mcp-contract",
+    "review",
+    "testing"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "open",
+  "parent_id": null,
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": null
+}

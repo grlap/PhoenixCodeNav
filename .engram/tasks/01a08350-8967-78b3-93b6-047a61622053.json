@@ -1,0 +1,58 @@
+{
+  "id": "01a08350-8967-78b3-93b6-047a61622053",
+  "external_ref": null,
+  "title": "Make StartsWith capability scope and Exists summary precise",
+  "outcome": "features[] accurately states that StartsWith is currently an F# semantic capability and that indexed Exists supports generic indexed-file presence.",
+  "acceptance": [
+    "Capability tests pin both distinctions without reducing the existing hard-budget margin.",
+    "Indexed Exists summary states generic indexed presence including web.config.",
+    "StartsWith feature id or summary explicitly states F# scope."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "bug",
+  "priority": 2,
+  "labels": [
+    "architecture",
+    "csharp",
+    "fsharp",
+    "mcp-contract",
+    "msbuild",
+    "review",
+    "semantic",
+    "semantic-correctness"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "completed",
+  "parent_id": "01a08337-0a68-7cf1-bd32-0478506fde2c",
+  "child_requirement": "optional",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": {
+    "summary": "Capability manifest now accurately scopes StartsWith to F# and retains generic indexed-file Exists wording within the unchanged hard budget.",
+    "completed_at": "2026-09-08T23:48:42.200651500Z",
+    "actor": {
+      "actor_id": "greg/codex",
+      "actor_kind": "agent"
+    }
+  },
+  "activity": {
+    "central": {
+      "adc76857900211ae274d86f82ae49b4548e5c9843700de8908879c9b69d06468": {
+        "activity_id": "adc76857900211ae274d86f82ae49b4548e5c9843700de8908879c9b69d06468",
+        "task_id": "01a08350-8967-78b3-93b6-047a61622053",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "greg/codex",
+          "actor_kind": "agent"
+        },
+        "state": "finished",
+        "state_revision": 2,
+        "event_id": "6fdb49ad1237eb7c7d040141f11aed2185748fb585ad773ec5fadd0d3aceacc8"
+      }
+    }
+  }
+}

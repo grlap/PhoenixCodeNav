@@ -1,0 +1,65 @@
+{
+  "id": "01a07525-eb9d-7582-ba71-88ce823725cd",
+  "external_ref": null,
+  "title": "UnsupportedLanguage envelope for compile-owned F# files still declares callers/callees unavailable after v0.12.88",
+  "outcome": "The UnsupportedLanguage/boundary envelope for compile-owned .fs/.fsi files reports the shipped F# surface truthfully: supportedLanguages and availableForFile include callers and callees, and the detail sentence names only hierarchy and C#-targeted ProjectReference semantics as unavailable, consistent with features[fsharp-unsupported-language-boundary].",
+  "acceptance": [
+    "At HEAD, NavigationTools.cs UnsupportedLanguage builder: supportedLanguages lists cs+fs for callers and callees; availableForFile for fsharpSemanticEligible files includes callers and callees; the detail sentence no longer says callers or callees remain unavailable",
+    "Delivered as its own reviewed packet (Codex) after the website commit; no limit, token, or argument change",
+    "FSharpTierATests pins the corrected envelope (callers/callees present in availableForFile; detail does not contain 'callers, callees' as unavailable), alongside the existing implementations pin"
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "bug",
+  "priority": 2,
+  "labels": [
+    "fsharp",
+    "mcp-contract",
+    "review"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "completed",
+  "parent_id": null,
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": {
+    "summary": "Delivered v0.12.89 in commit f2ca4732f5d7e9bae176219e35f89f37200bbf73: UnsupportedLanguage now advertises compile-owned F# callers/callees and outline accurately, boundary/detail wording distinguishes supported explicit/exact TFM selection from fail-closed compatibility fallback, tests and version pins are aligned, the full wrapper was GATES GREEN, and both fresh fallback reviewers returned CLEAN with no Critical/High.",
+    "completed_at": "2026-09-06T15:02:50.519371700Z",
+    "actor": {
+      "actor_id": "greg/codex",
+      "actor_kind": "agent"
+    }
+  },
+  "activity": {
+    "central": {
+      "56c4db5530d3597fab4934647a6c5f3e3627102cadd348c4f78e6828365f8158": {
+        "activity_id": "56c4db5530d3597fab4934647a6c5f3e3627102cadd348c4f78e6828365f8158",
+        "task_id": "01a07525-eb9d-7582-ba71-88ce823725cd",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "greg/codex",
+          "actor_kind": "agent"
+        },
+        "state": "finished",
+        "state_revision": 2,
+        "event_id": "24fec1c017de377cbf063670c8dbf8bfd176f05e84857a55704e237794ac9c53"
+      },
+      "8f4feab6d8f924d666cb519dc95b67b53209323dd2b979160b16b1e532e525ad": {
+        "activity_id": "8f4feab6d8f924d666cb519dc95b67b53209323dd2b979160b16b1e532e525ad",
+        "task_id": "01a07525-eb9d-7582-ba71-88ce823725cd",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "greg/codex",
+          "actor_kind": "agent"
+        },
+        "state": "started",
+        "state_revision": 1,
+        "event_id": "8f4feab6d8f924d666cb519dc95b67b53209323dd2b979160b16b1e532e525ad"
+      }
+    }
+  }
+}

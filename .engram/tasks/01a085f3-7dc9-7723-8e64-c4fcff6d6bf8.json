@@ -1,0 +1,31 @@
+{
+  "id": "01a085f3-7dc9-7723-8e64-c4fcff6d6bf8",
+  "external_ref": null,
+  "title": "Trim C# declared package IDs before fallback projection",
+  "outcome": "Trim C# declared package IDs before fallback projection",
+  "acceptance": [
+    "ParseSnapshot-produced PackageRefs fed to EvaluateCSharpPackageReferencesSnapshot return no package after Include then Remove, for both padded and plain Include identities."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "bug",
+  "priority": 3,
+  "labels": [
+    "architecture",
+    "csharp",
+    "fsharp",
+    "review",
+    "semantic-correctness",
+    "shared-packages"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "open",
+  "parent_id": null,
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": null
+}

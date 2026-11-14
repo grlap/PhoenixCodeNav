@@ -1,0 +1,55 @@
+{
+  "id": "01a0787f-40f8-7182-9f6d-4905d34b614e",
+  "external_ref": null,
+  "title": "Complete and sharpen the NavigationTools partial ownership map",
+  "outcome": "Every NavigationTools partial has an accurate Owns/Does-not-own header that routes readers to all live-source and heuristic-resolution responsibilities.",
+  "acceptance": [
+    "NavigationTools.Implementations.cs names the index-driven base-list heuristic fallback and its heuristic confidence labeling.",
+    "NavigationTools.Portal.cs and NavigationTools.Arity.cs carry accurate Owns/Does-not-own headers.",
+    "NavigationTools.Search.cs routes live source reads to both Outline.cs and the declaration-body path in Definition.cs."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "task",
+  "priority": 3,
+  "labels": [
+    "agent-experience",
+    "architecture",
+    "maintainability",
+    "review",
+    "structure"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "completed",
+  "parent_id": "01a07846-1a12-7cc1-84f6-7fdc7a895050",
+  "child_requirement": "optional",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": {
+    "summary": "Committed and pushed the three approved ownership-map corrections in 108dbaed3051e32a1b329ec189f5bd7bf10294bb: Implementations names the bounded index-driven base-list heuristic fallback and heuristic confidence; Portal and Arity have accurate ownership headers; Search routes live source reads to Outline and Definition declaration bodies.",
+    "completed_at": "2026-09-06T21:53:21.914269500Z",
+    "actor": {
+      "actor_id": "greg/codex",
+      "actor_kind": "agent"
+    }
+  },
+  "activity": {
+    "central": {
+      "27e1d4faa4508c82bf5f959cb929c59372ebdea5c4e0ec6a8cd1270946ee8163": {
+        "activity_id": "27e1d4faa4508c82bf5f959cb929c59372ebdea5c4e0ec6a8cd1270946ee8163",
+        "task_id": "01a0787f-40f8-7182-9f6d-4905d34b614e",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "greg/codex",
+          "actor_kind": "agent"
+        },
+        "state": "finished",
+        "state_revision": 2,
+        "event_id": "9f16fc923fc3debf320d48f73b0906cd404b4665f197984eed2c92aeb78ed17d"
+      }
+    }
+  }
+}

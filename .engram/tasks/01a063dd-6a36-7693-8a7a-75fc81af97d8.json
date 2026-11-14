@@ -1,0 +1,40 @@
+{
+  "id": "01a063dd-6a36-7693-8a7a-75fc81af97d8",
+  "external_ref": null,
+  "title": "Operation records + gauges: semantic ops from epuc.1 stats, search/index envelopes, instance.snapshot gauges, metric.sample, diagnostic.event",
+  "outcome": "Operation records + gauges: semantic ops from epuc.1 stats, search/index envelopes, instance.snapshot gauges, metric.sample, diagnostic.event",
+  "acceptance": [
+    "Operation records + gauges: semantic ops from epuc.1 stats, search/index envelopes, instance.snapshot gauges, metric.sample, diagnostic.event is done"
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "task",
+  "priority": 1,
+  "labels": [],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "open",
+  "parent_id": null,
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": null,
+  "activity": {
+    "central": {
+      "1fb8e4d3a67414ec7f9b28c1efa8e7d359215e2ce07f2883076cbc0288471ed9": {
+        "activity_id": "1fb8e4d3a67414ec7f9b28c1efa8e7d359215e2ce07f2883076cbc0288471ed9",
+        "task_id": "01a063dd-6a36-7693-8a7a-75fc81af97d8",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "fable",
+          "actor_kind": "agent"
+        },
+        "state": "released",
+        "state_revision": 2,
+        "event_id": "26a4510f0bc0c733e901320b61bcff0cf81294b6dc5480e5cceff88cceb84a3b"
+      }
+    }
+  }
+}

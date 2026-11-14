@@ -1,0 +1,66 @@
+{
+  "id": "01a063dd-887c-7630-9f20-3e13e01e490b",
+  "external_ref": null,
+  "title": "Accept documentationCommentId as a semantic selector",
+  "outcome": "Agents can carry a compiler-stable documentation comment identifier directly into definition, references, and implementations calls.",
+  "acceptance": [
+    "Existing symbolId emission is audited and any inconsistencies discovered in these flows are fixed in the same work.",
+    "Responses echo the resolved symbol identity and disclose ambiguity rather than guessing.",
+    "The capability is represented by its own features[] identifier and BuildInfo.Version is bumped.",
+    "definition, references, and implementations accept documentationCommentId wherever stable symbol selection is supported."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "feature",
+  "priority": 2,
+  "labels": [
+    "agent-experience",
+    "mcp-contract",
+    "semantic"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "completed",
+  "parent_id": null,
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": {
+    "summary": "Completed compiler-stable documentationCommentId selector support and closeout coverage.",
+    "completed_at": "2026-09-04T17:07:35.527394600Z",
+    "actor": {
+      "actor_id": "greg/codex",
+      "actor_kind": "agent"
+    }
+  },
+  "activity": {
+    "central": {
+      "914eb9ae9c90db54137426ec9fe8478f592624c7c41c56639ef099564d134c58": {
+        "activity_id": "914eb9ae9c90db54137426ec9fe8478f592624c7c41c56639ef099564d134c58",
+        "task_id": "01a063dd-887c-7630-9f20-3e13e01e490b",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "fable",
+          "actor_kind": "agent"
+        },
+        "state": "released",
+        "state_revision": 2,
+        "event_id": "28c4c14a76821db50d326bd39dd0d22694bf8dbed840a2b171bba9b081ba4755"
+      },
+      "fab95774bddabd18bf0d1e434cd70b3946707d969f0c3c3fdce1fb361a57b12d": {
+        "activity_id": "fab95774bddabd18bf0d1e434cd70b3946707d969f0c3c3fdce1fb361a57b12d",
+        "task_id": "01a063dd-887c-7630-9f20-3e13e01e490b",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "greg/codex",
+          "actor_kind": "agent"
+        },
+        "state": "finished",
+        "state_revision": 2,
+        "event_id": "5a344ded0cae4dc24138b29632f3d7b92f62377ad6f8682b1b672c82b91f07b1"
+      }
+    }
+  }
+}

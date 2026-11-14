@@ -1,0 +1,53 @@
+{
+  "id": "01a07795-f3da-7ce3-978d-0b6f0ba39eff",
+  "external_ref": null,
+  "title": "Split FSharpSemantic.fs by concern with compile-order preservation",
+  "outcome": "Split FSharpSemantic.fs by concern with compile-order preservation",
+  "acceptance": [
+    "FSharpSemantic.fs is split by concern with explicit F# compile order preserved, zero semantic behavior change, full gates, and dual review"
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "task",
+  "priority": 2,
+  "labels": [
+    "agent-experience",
+    "architecture",
+    "fsharp",
+    "maintainability",
+    "structure"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "completed",
+  "parent_id": "01a0748d-2331-79e0-a8a4-c57d709cd778",
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": {
+    "summary": "Committed packet 3 as 7f1c34aff5561724e96bed57633f32b5b4ac9bbf: pure extraction of the nine public F# semantic contracts into FSharpSemantic.Contracts.fs with explicit Outline -> Contracts -> Semantic compile order and zero behavior change.",
+    "completed_at": "2026-09-06T19:08:27.885152Z",
+    "actor": {
+      "actor_id": "greg/codex",
+      "actor_kind": "agent"
+    }
+  },
+  "activity": {
+    "central": {
+      "e3d37f2c597275d86f1986a9448b710c2d4c5128b3f0e28a5c9987ad10491d15": {
+        "activity_id": "e3d37f2c597275d86f1986a9448b710c2d4c5128b3f0e28a5c9987ad10491d15",
+        "task_id": "01a07795-f3da-7ce3-978d-0b6f0ba39eff",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "greg/codex",
+          "actor_kind": "agent"
+        },
+        "state": "finished",
+        "state_revision": 2,
+        "event_id": "bee0d68cabea4f25fb6345cb0d54fefd88fc551d3164e3565761cba85e039efb"
+      }
+    }
+  }
+}

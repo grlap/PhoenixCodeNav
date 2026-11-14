@@ -1,0 +1,53 @@
+{
+  "id": "01a07500-0ceb-7230-a39b-057fb3a080d1",
+  "external_ref": null,
+  "title": "Pin F# call-graph diagnostic-pressure budgeting",
+  "outcome": "Pin F# call-graph diagnostic-pressure budgeting",
+  "acceptance": [
+    "A regression under the existing response-budget test seam forces callers diagnostic trimming while preserving totalCallers and diagnosticCount, retaining a nonempty sample, setting diagnosticsTruncated, and staying within the UTF-8 cap"
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "task",
+  "priority": 2,
+  "labels": [
+    "fsharp",
+    "mcp-contract",
+    "review",
+    "semantic",
+    "testing"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "completed",
+  "parent_id": "01a063dd-580b-7480-8d28-895853574bf6",
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": {
+    "summary": "Added and committed F# caller diagnostic-pressure response-budget regression in 8a0ede51693945c528117d1b57dfd3662e341385.",
+    "completed_at": "2026-09-06T05:06:58.794801500Z",
+    "actor": {
+      "actor_id": "greg/codex",
+      "actor_kind": "agent"
+    }
+  },
+  "activity": {
+    "central": {
+      "fdaa185cd02916097ee4db9ca30773c31261f317ccb6d1897b9ecb8fab1b92eb": {
+        "activity_id": "fdaa185cd02916097ee4db9ca30773c31261f317ccb6d1897b9ecb8fab1b92eb",
+        "task_id": "01a07500-0ceb-7230-a39b-057fb3a080d1",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "greg/codex",
+          "actor_kind": "agent"
+        },
+        "state": "finished",
+        "state_revision": 2,
+        "event_id": "5b8644d9fc58ce815814f44eb1aab0b5b4316b1115c30f159d9ef2b9b2630eee"
+      }
+    }
+  }
+}

@@ -1,0 +1,45 @@
+{
+  "id": "01a0760e-7f0d-7a01-acf7-fcc1ea788a33",
+  "external_ref": null,
+  "title": "Restore the F# dependency-closure use-counting boundary in design.md",
+  "outcome": "The design authority states that dependency-closure uses are used for symbol binding but are not counted as reference results.",
+  "acceptance": [
+    "docs/design.md explicitly preserves the bind-without-counting constraint while describing workspace-dependent scans."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "task",
+  "priority": 3,
+  "labels": [
+    "architecture",
+    "fsharp",
+    "mcp-contract",
+    "review"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "cancelled",
+  "parent_id": "01a07525-eb9d-7582-ba71-88ce823725cd",
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": "Finding rejected on evidence: stale premise; see the recorded ruling",
+  "completion": null,
+  "activity": {
+    "central": {
+      "55c17c524faa70ade63b733fc6d729e75905ff5d7f322c505a3f12d6550d40e3": {
+        "activity_id": "55c17c524faa70ade63b733fc6d729e75905ff5d7f322c505a3f12d6550d40e3",
+        "task_id": "01a0760e-7f0d-7a01-acf7-fcc1ea788a33",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "greg/codex",
+          "actor_kind": "agent"
+        },
+        "state": "finished",
+        "state_revision": 2,
+        "event_id": "c1a310781fd4c1b7d88b3af9b8037042450005b4ba2922763915c7793b17b37a"
+      }
+    }
+  }
+}

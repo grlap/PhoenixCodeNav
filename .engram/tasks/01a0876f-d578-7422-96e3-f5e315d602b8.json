@@ -1,0 +1,31 @@
+{
+  "id": "01a0876f-d578-7422-96e3-f5e315d602b8",
+  "external_ref": null,
+  "title": "Give the F# reserved-property refusal its own note id",
+  "outcome": "Give the F# reserved-property refusal its own note id",
+  "acceptance": [
+    "distinct cause and accurate remedy asserted for reserved assignment. Deferred from current correction round."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "bug",
+  "priority": 2,
+  "labels": [
+    "csharp",
+    "fsharp",
+    "mcp-contract",
+    "msbuild",
+    "review",
+    "semantic-correctness"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "superseded",
+  "parent_id": "01a08737-d98f-79d0-8561-647172590308",
+  "child_requirement": "optional",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": "01a0878d-bc77-70a2-9f02-7fcdb4a9ebd7",
+  "disposal_reason": "Original dual review verified the implementation complete; this nonblocking residual remains open and must be independently actionable after its parent completion. Preserve original findings, provenance and latest qualifications.",
+  "completion": null
+}

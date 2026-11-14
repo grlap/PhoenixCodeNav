@@ -1,0 +1,54 @@
+{
+  "id": "01a085cf-12e8-70a1-9189-7fc216a37371",
+  "external_ref": null,
+  "title": "Restore cancellation within deferred package passes",
+  "outcome": "Restore cancellation within deferred package passes",
+  "acceptance": [
+    "Cancellation is checked during version, reference and global passes and per-spec loops with decisive coverage."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "task",
+  "priority": 3,
+  "labels": [
+    "architecture",
+    "csharp",
+    "fsharp",
+    "review",
+    "semantic-correctness",
+    "shared-packages"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "completed",
+  "parent_id": "01a0850a-f735-72e3-9ad0-7dcd34f3b95a",
+  "child_requirement": "optional",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": {
+    "summary": "All package evaluation passes and spec/mutation loops now check cancellation; both original reviewers verify fix. Added cancellation-on-reservation tests passed in standard suite, with PackageVersion case specifically decisive for per-spec responsiveness. Full1676/0 green.",
+    "completed_at": "2026-09-09T11:27:49.367627700Z",
+    "actor": {
+      "actor_id": "greg/codex",
+      "actor_kind": "agent"
+    }
+  },
+  "activity": {
+    "central": {
+      "66cda93e8cd082050fe1eac3385a37c8a7d0b717165a3dd0e07c944f92e9c0c4": {
+        "activity_id": "66cda93e8cd082050fe1eac3385a37c8a7d0b717165a3dd0e07c944f92e9c0c4",
+        "task_id": "01a085cf-12e8-70a1-9189-7fc216a37371",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "greg/codex",
+          "actor_kind": "agent"
+        },
+        "state": "finished",
+        "state_revision": 2,
+        "event_id": "9203d8b82c7f107b5b2f9c99bdf22241ce6063aef431926ec4a3912484d3c673"
+      }
+    }
+  }
+}

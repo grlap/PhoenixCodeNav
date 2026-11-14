@@ -1,0 +1,52 @@
+{
+  "id": "01a08929-c69d-7d73-88d2-e5a700db49d8",
+  "external_ref": null,
+  "title": "Close the Directory.Build.targets relevance filter over item-consumed properties",
+  "outcome": "Close the Directory.Build.targets relevance filter over item-consumed properties",
+  "acceptance": [
+    "A later Directory.Build.targets assignment to a property read solely through HintPath or reference metadata fails closed with fsharp_semantic_evaluation_order_unsupported; focused red-to-green tests and unchanged safe controls pass."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "bug",
+  "priority": 2,
+  "labels": [
+    "fsharp",
+    "msbuild",
+    "review",
+    "semantic-correctness"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "completed",
+  "parent_id": "01a088ef-a787-7fe1-9ea2-14952bbf776b",
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": {
+    "summary": "Original Claude and Codex verify shared IsReferenceInputProperty for group and per-property targets filtering includes consumed metadata names. Three metadata-only reassignment RED failures corrected; false-group controls pass. Codex independently probed six outcomes read-only. The narrower unresolved-import sibling predicate is a separately open Low, not part of this direct-PropertyGroup acceptance.",
+    "completed_at": "2026-09-10T02:59:48.137652Z",
+    "actor": {
+      "actor_id": "greg/codex",
+      "actor_kind": "agent"
+    }
+  },
+  "activity": {
+    "central": {
+      "8e1a4b1ef8f1fd97d8e5ae1955464b4ac48db099b3d7d9757a7829821f7ec926": {
+        "activity_id": "8e1a4b1ef8f1fd97d8e5ae1955464b4ac48db099b3d7d9757a7829821f7ec926",
+        "task_id": "01a08929-c69d-7d73-88d2-e5a700db49d8",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "greg/codex",
+          "actor_kind": "agent"
+        },
+        "state": "finished",
+        "state_revision": 2,
+        "event_id": "e9b9fcf7bc0e5d5b3dd1c858b0ef41ae3a02907a24613401bd802b6cde3f3867"
+      }
+    }
+  }
+}

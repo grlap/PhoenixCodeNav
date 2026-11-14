@@ -1,0 +1,29 @@
+{
+  "id": "01a0712f-93d9-74a3-b96a-5dc6256018df",
+  "external_ref": null,
+  "title": "Size the FCS project cache to the captured F# closure",
+  "outcome": "Avoid repeated IncrementalBuilder reconstruction while checking dependency-first F# ProjectReference closures.",
+  "acceptance": [
+    "A deep synthetic F# ProjectReference closure demonstrates IncrementalBuilder creation or equivalent project-build work scales linearly with closure node count.",
+    "Any project-cache bound change is implemented only after Greg explicitly approves the limit change."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "task",
+  "priority": 2,
+  "labels": [
+    "fsharp",
+    "performance",
+    "review"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "open",
+  "parent_id": "01a063dd-599c-7253-999b-3eff45080442",
+  "child_requirement": "optional",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": null
+}

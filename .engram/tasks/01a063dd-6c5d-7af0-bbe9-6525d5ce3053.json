@@ -1,0 +1,40 @@
+{
+  "id": "01a063dd-6c5d-7af0-bbe9-6525d5ce3053",
+  "external_ref": null,
+  "title": "Add decisive performance contracts for buffered reference-scope scanning",
+  "outcome": "Add decisive performance contracts for buffered reference-scope scanning",
+  "acceptance": [
+    "Add decisive performance contracts for buffered reference-scope scanning is done"
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "task",
+  "priority": 1,
+  "labels": [],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "open",
+  "parent_id": null,
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": null,
+  "activity": {
+    "central": {
+      "a27b0358a2d7d5b6e4d37a4e500716c473347b88ac0df959bf9ffd0e46918646": {
+        "activity_id": "a27b0358a2d7d5b6e4d37a4e500716c473347b88ac0df959bf9ffd0e46918646",
+        "task_id": "01a063dd-6c5d-7af0-bbe9-6525d5ce3053",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "fable",
+          "actor_kind": "agent"
+        },
+        "state": "released",
+        "state_revision": 2,
+        "event_id": "ba86b3b1959bf19e0186ed84e1b0ac27f08f227fd21e48769de45c23c099d1e7"
+      }
+    }
+  }
+}

@@ -1,0 +1,78 @@
+{
+  "id": "01a063dd-d2a0-76f3-9a64-ff735f5d0daf",
+  "external_ref": null,
+  "title": "Budget reflected documentationCommentId error fields",
+  "outcome": "Malformed, ambiguous, and missing documentation-ID errors remain within the established hard response budget with observable truncation or the declared exception metadata.",
+  "acceptance": [
+    "Oversized multibyte documentationCommentId input cannot produce an ordinary error envelope above the existing hard byte budget.",
+    "Tests cover malformed, missing, and ambiguous oversized identifiers and assert truncation evidence."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "bug",
+  "priority": 1,
+  "labels": [
+    "agent-experience",
+    "mcp-contract",
+    "performance",
+    "review",
+    "semantic"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "completed",
+  "parent_id": "01a063dd-887c-7630-9f20-3e13e01e490b",
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": {
+    "summary": "Closed documentationCommentId error-budget coverage in fdcd442.",
+    "completed_at": "2026-09-04T17:06:49.831189Z",
+    "actor": {
+      "actor_id": "greg/codex",
+      "actor_kind": "agent"
+    }
+  },
+  "activity": {
+    "central": {
+      "35e19b757d46dbf41230b29c9b5a345f7def03d64aba90f9f075841c599e28c7": {
+        "activity_id": "35e19b757d46dbf41230b29c9b5a345f7def03d64aba90f9f075841c599e28c7",
+        "task_id": "01a063dd-d2a0-76f3-9a64-ff735f5d0daf",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "fable",
+          "actor_kind": "agent"
+        },
+        "state": "released",
+        "state_revision": 2,
+        "event_id": "0b12e3529b04c3070a1dd9d2ca760f9e7a37d973a31b4a02d126b25b833ebc5f"
+      },
+      "40e364b08c2c9788248e17d88efc9fea906816f480eba46ed9eefe623793b7ac": {
+        "activity_id": "40e364b08c2c9788248e17d88efc9fea906816f480eba46ed9eefe623793b7ac",
+        "task_id": "01a063dd-d2a0-76f3-9a64-ff735f5d0daf",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "greg/codex",
+          "actor_kind": "agent"
+        },
+        "state": "finished",
+        "state_revision": 2,
+        "event_id": "7b61f77e0e3b6c4f324ffc5a1038c1289f0741b490be86927c53cac14c94a3e5"
+      },
+      "46389b033b44e819b7f5e30208074bacf9e0ab0ada7dc97129eb1026448d81c6": {
+        "activity_id": "46389b033b44e819b7f5e30208074bacf9e0ab0ada7dc97129eb1026448d81c6",
+        "task_id": "01a063dd-d2a0-76f3-9a64-ff735f5d0daf",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "greg/codex",
+          "actor_kind": "agent"
+        },
+        "state": "started",
+        "state_revision": 1,
+        "event_id": "46389b033b44e819b7f5e30208074bacf9e0ab0ada7dc97129eb1026448d81c6"
+      }
+    }
+  }
+}

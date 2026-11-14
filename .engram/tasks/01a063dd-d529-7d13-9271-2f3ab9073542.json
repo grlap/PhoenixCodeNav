@@ -1,0 +1,66 @@
+{
+  "id": "01a063dd-d529-7d13-9271-2f3ab9073542",
+  "external_ref": null,
+  "title": "Do not claim exact confidence for uncompiled documentationCommentId misses",
+  "outcome": "Documentation-ID absence is exact only after compiler-backed resolution; index misses and no-owner cases remain honestly indexed/partial with distinct reasons.",
+  "acceptance": [
+    "Distinct stable reasons and product tests cover both pre-compilation miss paths.",
+    "Empty indexed seeds and seeds without a C# compile owner do not return exact semantic confidence."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "bug",
+  "priority": 1,
+  "labels": [
+    "agent-experience",
+    "mcp-contract",
+    "review",
+    "semantic",
+    "semantic-correctness"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "completed",
+  "parent_id": "01a063dd-887c-7630-9f20-3e13e01e490b",
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": {
+    "summary": "Delivered confidence-correct documentationCommentId miss classification.",
+    "completed_at": "2026-09-04T15:48:48.679189Z",
+    "actor": {
+      "actor_id": "greg/codex",
+      "actor_kind": "agent"
+    }
+  },
+  "activity": {
+    "central": {
+      "32ecf4832ebc18dc1629abd8898c00e5393fa1e57c57cd6e8fcd36c849969a50": {
+        "activity_id": "32ecf4832ebc18dc1629abd8898c00e5393fa1e57c57cd6e8fcd36c849969a50",
+        "task_id": "01a063dd-d529-7d13-9271-2f3ab9073542",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "fable",
+          "actor_kind": "agent"
+        },
+        "state": "released",
+        "state_revision": 2,
+        "event_id": "341d670cef99e54c61ecfdba8dd953c52e1c9ee0f266f0883677b3b7400a02e0"
+      },
+      "85381d0cfcaa1afd433dc7eb077b35a46b218aa0ae7977ca234dfd200a695de1": {
+        "activity_id": "85381d0cfcaa1afd433dc7eb077b35a46b218aa0ae7977ca234dfd200a695de1",
+        "task_id": "01a063dd-d529-7d13-9271-2f3ab9073542",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "greg/codex",
+          "actor_kind": "agent"
+        },
+        "state": "finished",
+        "state_revision": 2,
+        "event_id": "9342d6cc5ae89a224ddeca3672bba9be57fba7ed9c4027fa9ac2d65c3ce4372d"
+      }
+    }
+  }
+}

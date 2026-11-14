@@ -1,0 +1,59 @@
+{
+  "id": "01a063dd-634e-7851-87df-a923d68a92d1",
+  "external_ref": null,
+  "title": "search_text hits in non-compiled files should carry orphaned:true (compiled-awareness parity)",
+  "outcome": "search_text hits in non-compiled files should carry orphaned:true (compiled-awareness parity)",
+  "acceptance": [
+    "search_text hits in non-compiled files should carry orphaned:true (compiled-awareness parity) is done"
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "bug",
+  "priority": 1,
+  "labels": [],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "completed",
+  "parent_id": null,
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": {
+    "summary": "Delivered test-first search_text orphaned:true annotations for unowned indexed .cs/.fs/.fsi token/regex hits and structured token suggestion samples. Final full gates 2071/0, MCP 48/0, website 167, Release zero warnings/errors; complete Codex and Claude reviews CLEAN. Two nonblocking Low follow-ups recorded. Eight-path implementation remains uncommitted/unpublished; explicit commit and push authority is still required.",
+    "completed_at": "2026-09-11T01:03:50.663718600Z",
+    "actor": {
+      "actor_id": "greg/codex",
+      "actor_kind": "agent"
+    }
+  },
+  "activity": {
+    "central": {
+      "6046cb587321c624a06ec8de8c43da23a27e6300d832c948094ccb54323d5d66": {
+        "activity_id": "6046cb587321c624a06ec8de8c43da23a27e6300d832c948094ccb54323d5d66",
+        "task_id": "01a063dd-634e-7851-87df-a923d68a92d1",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "fable",
+          "actor_kind": "agent"
+        },
+        "state": "released",
+        "state_revision": 2,
+        "event_id": "6f19b2e6d5cea506b4e79a47dd5d570782ef2612b231bbd32d9b34723f28e94e"
+      },
+      "8fb14e08835a8c25867e7d1f5bb343b9d221d279717c1e1b5a33fac5a429242e": {
+        "activity_id": "8fb14e08835a8c25867e7d1f5bb343b9d221d279717c1e1b5a33fac5a429242e",
+        "task_id": "01a063dd-634e-7851-87df-a923d68a92d1",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "greg/codex",
+          "actor_kind": "agent"
+        },
+        "state": "finished",
+        "state_revision": 2,
+        "event_id": "a23a4a74110049dabc936308cb61bd4fd2889bbf65aa659aa3828205de9aeacb"
+      }
+    }
+  }
+}

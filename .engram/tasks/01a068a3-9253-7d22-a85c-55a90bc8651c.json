@@ -1,0 +1,52 @@
+{
+  "id": "01a068a3-9253-7d22-a85c-55a90bc8651c",
+  "external_ref": null,
+  "title": "Reject invalid Phoenix CLI daemon result shapes",
+  "outcome": "The CLI emits a non-retryable phoenix_tool_result_invalid object and exit 1 unless the daemon returns exactly one valid Phoenix JSON object payload.",
+  "acceptance": [
+    "Scalar, null, extra-content, and malformed-text daemon results return phoenix_tool_result_invalid with exit 1; no invalid shape exits 0."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "bug",
+  "priority": 1,
+  "labels": [
+    "agent-experience",
+    "cli",
+    "mcp-contract",
+    "review"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "completed",
+  "parent_id": "01a06819-d56e-7e42-99e2-d6c75600a4c8",
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": {
+    "summary": "Delivered in commit eee9ee5 as part of the reviewed Phoenix CLI changeset.",
+    "completed_at": "2026-09-03T21:34:21.944403700Z",
+    "actor": {
+      "actor_id": "termal",
+      "actor_kind": "agent"
+    }
+  },
+  "activity": {
+    "central": {
+      "3c0cf24a8eb378235ee21a0d1ef2fa16744abf7bfc3d8563901a8672669ab64e": {
+        "activity_id": "3c0cf24a8eb378235ee21a0d1ef2fa16744abf7bfc3d8563901a8672669ab64e",
+        "task_id": "01a068a3-9253-7d22-a85c-55a90bc8651c",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "termal",
+          "actor_kind": "agent"
+        },
+        "state": "finished",
+        "state_revision": 2,
+        "event_id": "ad0262a6d2aa8c814a2ccab3fb8753c3af23195b1a16a8c605d40b5a1ae618cb"
+      }
+    }
+  }
+}

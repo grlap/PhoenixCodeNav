@@ -1,0 +1,57 @@
+{
+  "id": "01a08337-0a68-7cf1-bd32-0478506fde2c",
+  "external_ref": null,
+  "title": "Support bounded MSBuild property StartsWith conditions",
+  "outcome": "Support bounded MSBuild property StartsWith conditions",
+  "acceptance": [
+    "The real StartsWith Or Exists condition shape selects the expected F# compiler define.",
+    "The shared bounded expression evaluator supports literal-argument $(Property.StartsWith('prefix')) with native ordinal case-sensitive semantics.",
+    "Unsupported property functions still fail closed and no existing limit changes.",
+    "Version, feature manifest, focused tests, full gates, and dual review are complete."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "feature",
+  "priority": 1,
+  "labels": [
+    "architecture",
+    "csharp",
+    "fsharp",
+    "msbuild",
+    "semantic",
+    "semantic-correctness"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "completed",
+  "parent_id": "01a08298-8fc2-7781-90fb-e9d128515475",
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": {
+    "summary": "Delivered bounded F# MSBuild Property.StartsWith conditions with strict scalar parity, receiver-aware dependency tracking, versioned capability disclosure, decisive regressions, full green gates, and final same-session dual-review clearance.",
+    "completed_at": "2026-09-08T23:48:53.749112600Z",
+    "actor": {
+      "actor_id": "greg/codex",
+      "actor_kind": "agent"
+    }
+  },
+  "activity": {
+    "central": {
+      "0223d4e0fea82b29737b6b10242284e1e89a200efafc8c677e0e09f68a284831": {
+        "activity_id": "0223d4e0fea82b29737b6b10242284e1e89a200efafc8c677e0e09f68a284831",
+        "task_id": "01a08337-0a68-7cf1-bd32-0478506fde2c",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "greg/codex",
+          "actor_kind": "agent"
+        },
+        "state": "finished",
+        "state_revision": 2,
+        "event_id": "ca5243277289da329a75ddd86bdacf266f8bea757a147660beed84d73a235e77"
+      }
+    }
+  }
+}

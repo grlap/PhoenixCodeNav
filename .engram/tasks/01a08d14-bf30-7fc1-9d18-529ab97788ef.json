@@ -1,0 +1,50 @@
+{
+  "id": "01a08d14-bf30-7fc1-9d18-529ab97788ef",
+  "external_ref": null,
+  "title": "Declare Core distribution intent and document the breaking Ensure signature",
+  "outcome": "Core's intended distribution and API compatibility policy is explicit, and direct callers can discover the Ensure migration.",
+  "acceptance": [
+    "The five-argument to explicit-mode six-argument WorktreeIndexer.Ensure migration is documented in the appropriate Core API/release surface, and the owner decides whether Core is intended to be separately packaged."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "task",
+  "priority": 3,
+  "labels": [
+    "architecture",
+    "review"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "completed",
+  "parent_id": null,
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": {
+    "summary": "Owner chose one Phoenix MCP/CLI product. Both engine libraries explicitly non-packable; distribution policy and breaking Ensure migration documented. Full gate and new dual review CLEAN; delivered in worktree, not yet committed/pushed.",
+    "completed_at": "2026-09-10T23:21:29.645571200Z",
+    "actor": {
+      "actor_id": "greg/codex",
+      "actor_kind": "agent"
+    }
+  },
+  "activity": {
+    "central": {
+      "84dee35da89cc174a4cd759bed5f0ae1d52190b6c210a582c3ccfb1ee3601984": {
+        "activity_id": "84dee35da89cc174a4cd759bed5f0ae1d52190b6c210a582c3ccfb1ee3601984",
+        "task_id": "01a08d14-bf30-7fc1-9d18-529ab97788ef",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "greg/codex",
+          "actor_kind": "agent"
+        },
+        "state": "finished",
+        "state_revision": 2,
+        "event_id": "33dff43f8271c454761c2f4e2bcd33b197f78d952dc96db80fc7748efff05f69"
+      }
+    }
+  }
+}

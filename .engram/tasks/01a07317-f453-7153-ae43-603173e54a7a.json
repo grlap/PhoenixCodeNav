@@ -1,0 +1,54 @@
+{
+  "id": "01a07317-f453-7153-ae43-603173e54a7a",
+  "external_ref": null,
+  "title": "Preserve explicit daemon index destinations across workspace aliases",
+  "outcome": "Identical explicit database destinations derive the same canonical daemon key when the same physical workspace is reached through lexical or junction/symlink root spellings.",
+  "acceptance": [
+    "A regression using one explicit absolute database path across a physical workspace root and its junction/symlink alias derives one key and the live handshake joins one daemon.",
+    "The original Codex and Claude reviewers verify the final packet with no unresolved Critical or High finding."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "bug",
+  "priority": 1,
+  "labels": [
+    "daemon",
+    "index-freshness",
+    "mcp-contract",
+    "review",
+    "windows"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "completed",
+  "parent_id": "01a072be-3cbf-7900-8086-ffa06c2a8671",
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": {
+    "summary": "Canonicalized explicit daemon index destinations through the nearest existing physical ancestor, closing both workspace-alias path directions without creating the destination parent.",
+    "completed_at": "2026-09-05T20:26:55.354929600Z",
+    "actor": {
+      "actor_id": "greg/codex",
+      "actor_kind": "agent"
+    }
+  },
+  "activity": {
+    "central": {
+      "2b585024b2ff4ffc1eb3dea5165f84cd61bdc244398287175683f28808345ad8": {
+        "activity_id": "2b585024b2ff4ffc1eb3dea5165f84cd61bdc244398287175683f28808345ad8",
+        "task_id": "01a07317-f453-7153-ae43-603173e54a7a",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "greg/codex",
+          "actor_kind": "agent"
+        },
+        "state": "finished",
+        "state_revision": 2,
+        "event_id": "2cb6297f9dd970d2c83e3959119d3639d7cdaa392b9b2ea16de837081e342080"
+      }
+    }
+  }
+}

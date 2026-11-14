@@ -1,0 +1,54 @@
+{
+  "id": "01a085cf-121c-72a3-b1ee-550aa68dcc2c",
+  "external_ref": null,
+  "title": "Resolve central versions after final package reference mutations",
+  "outcome": "Resolve central versions after final package reference mutations",
+  "acceptance": [
+    "Paired reference/version removal passes with an empty package set in both C# and F#; surviving unresolved references remain refused."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "bug",
+  "priority": 1,
+  "labels": [
+    "architecture",
+    "csharp",
+    "fsharp",
+    "review",
+    "semantic-correctness",
+    "shared-packages"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "completed",
+  "parent_id": "01a0850a-f735-72e3-9ad0-7dcd34f3b95a",
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": {
+    "summary": "Both original reviewers6504/6505 verified premature central-version resolution High fixed in the SAME sessions. Codex repeated original paired-removal probe: Error=null, empty refs. Claude traced pending nullable versions through all mutations, globals/collisions then survivor-only resolution. Standard1676/0 includes paired-removal and later-override tests plus restore-backed FCS case. No commit performed.",
+    "completed_at": "2026-09-09T11:27:49.165455300Z",
+    "actor": {
+      "actor_id": "greg/codex",
+      "actor_kind": "agent"
+    }
+  },
+  "activity": {
+    "central": {
+      "00604bd782ddf05f6a57d802a14ed3c934460aecc7ab6a67fe331447c9bd2d51": {
+        "activity_id": "00604bd782ddf05f6a57d802a14ed3c934460aecc7ab6a67fe331447c9bd2d51",
+        "task_id": "01a085cf-121c-72a3-b1ee-550aa68dcc2c",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "greg/codex",
+          "actor_kind": "agent"
+        },
+        "state": "finished",
+        "state_revision": 2,
+        "event_id": "da9a9762a77fc040b641e32c26b2653fad77c80e5a368e5f1d39bc46a1d1bdaf"
+      }
+    }
+  }
+}

@@ -1,0 +1,30 @@
+{
+  "id": "01a0781e-43a3-71b1-b47c-94a39063e88b",
+  "external_ref": null,
+  "title": "Drop only build-proven dead #nowarn directives from FSharpSemantic.Contracts.fs",
+  "outcome": "Remove only warning suppressions that an isolated Release build proves unnecessary from the F# contracts file",
+  "acceptance": [
+    "After removing only build-proven dead directives, dotnet build PhoenixCodeNav.sln -c Release completes with literal 0 warnings and 0 errors",
+    "Test #nowarn 57 and #nowarn 3261 independently by removing one directive at a time; retain any directive whose removal produces a warning",
+    "The cleanup lands as its own reviewed packet, or is explicitly absorbed as an enumerated header change by the authorized F# engine-module split if that item executes first"
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "task",
+  "priority": 3,
+  "labels": [
+    "architecture",
+    "fsharp",
+    "review"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "open",
+  "parent_id": null,
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": null
+}

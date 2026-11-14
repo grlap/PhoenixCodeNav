@@ -1,0 +1,31 @@
+{
+  "id": "01a08c5a-9e43-7fe1-aac0-b9897c00a362",
+  "external_ref": null,
+  "title": "Require an explicit ProjectModelMode on the public WorktreeIndexer.Ensure overload",
+  "outcome": "Require an explicit ProjectModelMode on the public WorktreeIndexer.Ensure overload",
+  "acceptance": [
+    "Standalone public worktree publication takes an explicit ProjectModelMode and uses it through sibling reconciliation; production manager propagation and pinned readiness behavior remain intact."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "task",
+  "priority": 3,
+  "labels": [
+    "architecture",
+    "default",
+    "fsharp",
+    "project-model",
+    "review",
+    "semantic"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "superseded",
+  "parent_id": "01a08c08-cb5e-7b42-a5e0-1f02de81511c",
+  "child_requirement": "optional",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": "01a08c62-5b97-7c53-b370-14c7a089b031",
+  "disposal_reason": "Continue this accepted nonblocking review follow-up independently after the reviewed parent delivery was committed and pushed as051cbc2; preserve original parent provenance and acceptance.",
+  "completion": null
+}

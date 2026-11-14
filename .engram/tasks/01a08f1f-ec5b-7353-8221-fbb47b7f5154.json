@@ -1,0 +1,51 @@
+{
+  "id": "01a08f1f-ec5b-7353-8221-fbb47b7f5154",
+  "external_ref": null,
+  "title": "Keep retirement authority failures non-retryable instead of mapping them to daemon_proxy_failed",
+  "outcome": "Known authority refusals during older-daemon retirement retain actionable terminal advice.",
+  "acceptance": [
+    "A regression exercises retirement authority failure classification and its catch wiring; the result uses the existing appropriate authority cause with retryable:false and no in-session recovery. Generic unrelated proxy failures retain their intended advice."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "bug",
+  "priority": 3,
+  "labels": [
+    "daemon",
+    "mcp-contract",
+    "review"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "completed",
+  "parent_id": null,
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": {
+    "summary": "Completed full25-path Codex6622 and Claude6623 reviews both CLEAN, no Critical/High; neither reports a defect in retirement mapping. Real proxy and both CLI wrong-nonce retirement controls first failed against old wiring and pass in final2169/0 suite; both endpoint/response mapper unit rows pass. Existing authority causes remain retryable:false/terminal and generic unrelated proxy advice retained. Endpoint OS rejection is unit-only on Windows, not claimed as a live foreign endpoint reproduction. Final gate0warnings,MCP48/0,website167; raw packets complete3154/13032bytes, all25source files unchanged. Current low on separate dispatch cleanup and unresolved catalog guard do not invalidate this item's exact acceptance. No Git.",
+    "completed_at": "2026-09-11T07:20:25.864304700Z",
+    "actor": {
+      "actor_id": "greg/codex",
+      "actor_kind": "agent"
+    }
+  },
+  "activity": {
+    "central": {
+      "201b7250818bf052b8a964e5e4f47ff15f1ec1e740c1d107c059a43a2953e1e7": {
+        "activity_id": "201b7250818bf052b8a964e5e4f47ff15f1ec1e740c1d107c059a43a2953e1e7",
+        "task_id": "01a08f1f-ec5b-7353-8221-fbb47b7f5154",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "greg/codex",
+          "actor_kind": "agent"
+        },
+        "state": "finished",
+        "state_revision": 2,
+        "event_id": "4db642862c92de318b9a92b293434e83e0f01ba26fdee6a71041a8cc7e9ef324"
+      }
+    }
+  }
+}

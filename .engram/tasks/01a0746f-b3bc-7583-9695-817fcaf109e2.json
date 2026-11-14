@@ -1,0 +1,29 @@
+{
+  "id": "01a0746f-b3bc-7583-9695-817fcaf109e2",
+  "external_ref": null,
+  "title": "Use a valid F# signature fixture for hidden-implementation coverage",
+  "outcome": "Use a valid F# signature fixture for hidden-implementation coverage",
+  "acceptance": [
+    "The hidden-signature implementations regression uses compiler-valid F# source with zero error diagnostics",
+    "The regression asserts exact semantic confidence while retaining the hidden type, hidden override, and public .fsi/.fs single-hit assertions"
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "task",
+  "priority": 2,
+  "labels": [
+    "fsharp",
+    "review",
+    "testing"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "open",
+  "parent_id": null,
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": null
+}

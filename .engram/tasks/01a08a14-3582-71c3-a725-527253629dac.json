@@ -1,0 +1,31 @@
+{
+  "id": "01a08a14-3582-71c3-a725-527253629dac",
+  "external_ref": null,
+  "title": "Rename the Core scans-complete locals to match the corrected parameter",
+  "outcome": "Rename the Core scans-complete locals to match the corrected parameter",
+  "acceptance": [
+    "The references, callers and implementations coverage constructors use scansComplete locals and a named ScansComplete argument, while retaining the derived approximate-model completeness invariant."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "task",
+  "priority": 3,
+  "labels": [
+    "architecture",
+    "fsharp",
+    "msbuild",
+    "pilot",
+    "project-model",
+    "review"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "open",
+  "parent_id": "01a089a5-604d-7a91-b551-f486866243fd",
+  "child_requirement": "optional",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": null
+}

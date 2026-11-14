@@ -1,0 +1,44 @@
+{
+  "id": "01a063dd-7ec0-7011-85ad-4288208d8ec4",
+  "external_ref": null,
+  "title": "Make the repository database ignore policy explicit",
+  "outcome": "The Engram migration intentionally defines whether non-.codenav database files inside the worktree are ignored, without silently inheriting an unrelated tracker default.",
+  "acceptance": [
+    "A focused git check-ignore probe demonstrates the intended treatment of .codenav/index.db, legacy Beads databases, and an arbitrary worktree database",
+    "The owner-approved database ignore policy is encoded in .gitignore and explained next to the rule"
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "task",
+  "priority": 3,
+  "labels": [
+    "git",
+    "review"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "open",
+  "parent_id": "01a063dd-7b2f-78e2-b2cc-385fd932b308",
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": null,
+  "activity": {
+    "central": {
+      "fbd6a7da87932c08d82defd4bde3858a485a7733253f6626d169d359afaac128": {
+        "activity_id": "fbd6a7da87932c08d82defd4bde3858a485a7733253f6626d169d359afaac128",
+        "task_id": "01a063dd-7ec0-7011-85ad-4288208d8ec4",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "fable",
+          "actor_kind": "agent"
+        },
+        "state": "released",
+        "state_revision": 2,
+        "event_id": "432f5c6f2e0163f58de027020b800afda4ccd861c954f0c40daa5a6ce7f3a2a9"
+      }
+    }
+  }
+}

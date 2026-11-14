@@ -1,0 +1,29 @@
+{
+  "id": "01a084fb-561d-7030-bf70-b8dcfb273cb9",
+  "external_ref": null,
+  "title": "Name fsharp_semantic_default_context_assumed in capability summary",
+  "outcome": "Name fsharp_semantic_default_context_assumed in capability summary",
+  "acceptance": [
+    "Default-context capability summary names fsharp_semantic_default_context_assumed with a matching assertion, without changing approved limits."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "task",
+  "priority": 3,
+  "labels": [
+    "fsharp",
+    "mcp-contract",
+    "review",
+    "semantic-correctness"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "open",
+  "parent_id": "01a084da-3f35-7b71-942e-9b0449437a74",
+  "child_requirement": "optional",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": null
+}

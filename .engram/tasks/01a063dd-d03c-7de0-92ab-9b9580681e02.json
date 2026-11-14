@@ -1,0 +1,78 @@
+{
+  "id": "01a063dd-d03c-7de0-92ab-9b9580681e02",
+  "external_ref": null,
+  "title": "Preserve documentationCommentId identity for same-line overloads",
+  "outcome": "A stable documentation ID resolves and navigates to that exact Roslyn symbol even when another same-name overload shares its source line.",
+  "acceptance": [
+    "A product test with two same-name overloads on one line proves the second ID cannot resolve to the first.",
+    "definition and references preserve source column or equivalent symbol identity through retargeting and verify the returned Roslyn documentation ID equals the request."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "bug",
+  "priority": 1,
+  "labels": [
+    "agent-experience",
+    "mcp-contract",
+    "review",
+    "semantic",
+    "semantic-correctness"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "completed",
+  "parent_id": "01a063dd-887c-7630-9f20-3e13e01e490b",
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": {
+    "summary": "Closed same-line documentationCommentId overload identity coverage in fdcd442.",
+    "completed_at": "2026-09-04T17:06:49.755233900Z",
+    "actor": {
+      "actor_id": "greg/codex",
+      "actor_kind": "agent"
+    }
+  },
+  "activity": {
+    "central": {
+      "3d10cb41d78d8b0bf990c7ade29fed3226fb607dcc9c61478108f50874206016": {
+        "activity_id": "3d10cb41d78d8b0bf990c7ade29fed3226fb607dcc9c61478108f50874206016",
+        "task_id": "01a063dd-d03c-7de0-92ab-9b9580681e02",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "greg/codex",
+          "actor_kind": "agent"
+        },
+        "state": "finished",
+        "state_revision": 2,
+        "event_id": "f8bae49ec8133f2e829a07c90d37835cc0e9f25b8dbdf914b5de6fbdf650db16"
+      },
+      "dcc962a45fee70f047f2f6aac3b30eee89702d1990dbd909f62e564099020e54": {
+        "activity_id": "dcc962a45fee70f047f2f6aac3b30eee89702d1990dbd909f62e564099020e54",
+        "task_id": "01a063dd-d03c-7de0-92ab-9b9580681e02",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "fable",
+          "actor_kind": "agent"
+        },
+        "state": "released",
+        "state_revision": 2,
+        "event_id": "9e98a1d0261a6b763d3b3f9f92c11c08f935b76ce5a6e19720c06b8978d920ff"
+      },
+      "e370d311d0e0004450abf0dc45091a50a3e5b90bde220c9945dabb95bdd71e2d": {
+        "activity_id": "e370d311d0e0004450abf0dc45091a50a3e5b90bde220c9945dabb95bdd71e2d",
+        "task_id": "01a063dd-d03c-7de0-92ab-9b9580681e02",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "greg/codex",
+          "actor_kind": "agent"
+        },
+        "state": "started",
+        "state_revision": 1,
+        "event_id": "e370d311d0e0004450abf0dc45091a50a3e5b90bde220c9945dabb95bdd71e2d"
+      }
+    }
+  }
+}

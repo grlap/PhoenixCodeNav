@@ -1,0 +1,31 @@
+{
+  "id": "01a06f69-766a-79e0-84d5-6e6fc2c38b7f",
+  "external_ref": null,
+  "title": "Website visible defects: code-window clipping, mobile collisions, br-in-headings, label wrap, JSON-LD OS/license",
+  "outcome": "Not selected by Greg on 2026-09-04 (Tier 1 of the website assessment); recorded so the findings are not lost.",
+  "acceptance": [
+    "'MCP, in plain English' label does not wrap at 1440px; tablet H1 has a single space between accent lines; section 06 eyebrow no longer duplicates its H2; BOUND and ONE cards use distinct glyphs",
+    "At 390px the grep-field chips do not overlap and the final-CTA orbit dots do not land on text or buttons",
+    "Code windows no longer clip long lines without a scroll affordance at 1440px and 390px (anatomy step 02 path, mobile windows)",
+    "H2s with <br> yield correctly spaced accessible names (no 'abetter question', 'turnsvar')",
+    "JSON-LD operatingSystem reflects documented platforms (docs/design.md) or the page states Windows-first explicitly, and the Apache-2.0 license appears on the page; verify.mjs updated in step"
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "bug",
+  "priority": 2,
+  "labels": [
+    "design",
+    "website"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "open",
+  "parent_id": null,
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": null
+}

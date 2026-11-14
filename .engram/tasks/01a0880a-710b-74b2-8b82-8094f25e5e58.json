@@ -1,0 +1,29 @@
+{
+  "id": "01a0880a-710b-74b2-8b82-8094f25e5e58",
+  "external_ref": null,
+  "title": "Make multi-consumer values, handlers and phase-dependent rules explicit at their definition sites",
+  "outcome": "Make multi-consumer values, handlers and phase-dependent rules explicit at their definition sites",
+  "acceptance": [
+    "Inventory the places where one value, handler set, try block or rule serves more than one consumer or more than one evaluation phase, and record for each whether the multiplicity is expressed in the code or left to the author to remember.",
+    "Propose a bounded design making the multiplicity explicit where it is currently implicit — separate fields for separate consumers, named phase in the type, or an enumerated handler contract — obtaining an independent design opinion before implementation."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "research",
+  "priority": 3,
+  "labels": [
+    "architecture",
+    "cross-cutting",
+    "review"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "open",
+  "parent_id": null,
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": null
+}

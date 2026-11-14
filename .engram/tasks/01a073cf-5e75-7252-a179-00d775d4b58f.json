@@ -1,0 +1,27 @@
+{
+  "id": "01a073cf-5e75-7252-a179-00d775d4b58f",
+  "external_ref": null,
+  "title": "Report a pending declaring-project status on F# reference deadlines",
+  "outcome": "Coverage distinguishes a declaring-project scan interrupted by the request deadline from a status that does not apply.",
+  "acceptance": [
+    "A deterministic deadline regression interrupts the declaring-project scan and coverage reports declaringProjectStatus as pending with an appropriate stable reason."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "task",
+  "priority": 3,
+  "labels": [
+    "mcp-contract",
+    "review"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "open",
+  "parent_id": null,
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": null
+}

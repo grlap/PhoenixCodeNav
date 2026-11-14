@@ -1,0 +1,35 @@
+{
+  "id": "01a10f0e-25f7-7bf1-93b4-06a3286575d4",
+  "external_ref": null,
+  "title": "Document cleanup or owner-approved retention for accumulated gate run evidence",
+  "outcome": "Document cleanup or owner-approved retention for accumulated gate run evidence",
+  "acceptance": [
+    "Gate evidence cleanup/retention behavior is documented and preserves evidence needed for active runs.",
+    "Any new count or file retention limit is explicitly approved by Greg before implementation."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "task",
+  "priority": 3,
+  "labels": [
+    "architecture",
+    "csharp",
+    "fsharp",
+    "msbuild",
+    "performance",
+    "review",
+    "semantic",
+    "semantic-correctness",
+    "testing"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "open",
+  "parent_id": "01a10ebb-ede1-7691-974d-2323afd3d8fd",
+  "child_requirement": "optional",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": null
+}

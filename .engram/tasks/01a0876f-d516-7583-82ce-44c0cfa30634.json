@@ -1,0 +1,53 @@
+{
+  "id": "01a0876f-d516-7583-82ce-44c0cfa30634",
+  "external_ref": null,
+  "title": "Restore proxy relay shutdown handling so cancellation exits cleanly",
+  "outcome": "Restore proxy relay shutdown handling so cancellation exits cleanly",
+  "acceptance": [
+    "deterministic mid-relay cancellation returns exit 0; broken output handled without a second MCP server."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "bug",
+  "priority": 1,
+  "labels": [
+    "agent-experience",
+    "daemon",
+    "mcp-contract",
+    "recovery",
+    "review"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "completed",
+  "parent_id": "01a08735-5bf6-7463-a954-43e838d04c76",
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": {
+    "summary": "Real accepted-handshake RunAsync deterministic flush tests reproduced shutdown TaskCanceledException and broken-output IOException before fix; relay-only catches now return0/4 and always clean up pending copy. Original Claude6511 and Codex6510 verified source and parent RED/GREEN. No-second-server guarantee is supported by separate out-of-process raw-relay test; injected output.Length alone is not that proof.",
+    "completed_at": "2026-09-09T18:59:36.904486900Z",
+    "actor": {
+      "actor_id": "greg/codex",
+      "actor_kind": "agent"
+    }
+  },
+  "activity": {
+    "central": {
+      "ab0972f5129f910ef3dc289511c68555bad7ab6be6de413259ddf4c35cead559": {
+        "activity_id": "ab0972f5129f910ef3dc289511c68555bad7ab6be6de413259ddf4c35cead559",
+        "task_id": "01a0876f-d516-7583-82ce-44c0cfa30634",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "greg/codex",
+          "actor_kind": "agent"
+        },
+        "state": "finished",
+        "state_revision": 2,
+        "event_id": "32b2aeff030f1222a92b351199ca4ef74c1897971caafe2efb57776254b6d7ad"
+      }
+    }
+  }
+}

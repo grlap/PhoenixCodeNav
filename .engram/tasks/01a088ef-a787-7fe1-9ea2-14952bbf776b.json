@@ -1,0 +1,52 @@
+{
+  "id": "01a088ef-a787-7fe1-9ea2-14952bbf776b",
+  "external_ref": null,
+  "title": "Preserve F# import-sentinel bookkeeping across item-order boundaries",
+  "outcome": "Preserve F# import-sentinel bookkeeping across item-order boundaries",
+  "acceptance": [
+    "End-to-end closure requires the real late Directory.Build.targets idiom starting with an ABSENT sentinel: evaluate the guarded reference-bearing import, assign the flag to true, retain the intended dependency in the semantic result, and skip the distinct second guarded import with no unresolved-property or ordering refusal. Changing the error code or passing only a seeded/early variant does not satisfy this criterion.",
+    "The late Directory.Build.targets flag-only explicit-empty/false repro succeeds, records true, and suppresses the second guarded import; reference-bearing early/late controls retain the intended dependency. Decisive existing mutable compile/reference order-refusal controls remain correct; do not merely disable the ordering guard."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "bug",
+  "priority": 2,
+  "labels": [
+    "fsharp",
+    "msbuild",
+    "semantic-correctness"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "completed",
+  "parent_id": null,
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": {
+    "summary": "Delivered and pushed in 06c15fc64130a098da6b1852523c4bfb9996d914 after Greg's explicit commit-and-push authorization. Coupled absent-late import/reference/sentinel acceptance and refusal controls verified; sameoriginaldualreview CLEAN, fullgate GREEN; deferred Low followups remain open.",
+    "completed_at": "2026-09-10T03:12:41.075292100Z",
+    "actor": {
+      "actor_id": "greg/codex",
+      "actor_kind": "agent"
+    }
+  },
+  "activity": {
+    "central": {
+      "2a52e0bcea142f00fde67b12083228a44a7e530f78181f4965fab12f60a72e79": {
+        "activity_id": "2a52e0bcea142f00fde67b12083228a44a7e530f78181f4965fab12f60a72e79",
+        "task_id": "01a088ef-a787-7fe1-9ea2-14952bbf776b",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "greg/codex",
+          "actor_kind": "agent"
+        },
+        "state": "finished",
+        "state_revision": 2,
+        "event_id": "d935fad5723011bb5f13ce7629af0687ca87d8ef206286c47d092a80e6146895"
+      }
+    }
+  }
+}

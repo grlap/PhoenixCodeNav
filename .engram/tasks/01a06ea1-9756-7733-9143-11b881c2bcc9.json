@@ -1,0 +1,49 @@
+{
+  "id": "01a06ea1-9756-7733-9143-11b881c2bcc9",
+  "external_ref": null,
+  "title": "Refine hero motion control and central particle band",
+  "outcome": "A right-aligned icon-only motion control and a denser, narrower central particle band, preserving the outer ring and hero layout.",
+  "acceptance": [
+    "Central horizontal dot band is visibly denser and slightly narrower; outer ring remains 1.08 + t * 0.01.",
+    "Pause control appears on the right without visible wording and retains accessible pause/play and reduced-motion states.",
+    "Website verification and focused desktop/mobile browser checks pass."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "task",
+  "priority": 1,
+  "labels": [],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "completed",
+  "parent_id": null,
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": {
+    "summary": "Right-aligned icon-only pause control and denser, narrower central particle band; outer ring unchanged.",
+    "completed_at": "2026-09-04T22:58:38.183792400Z",
+    "actor": {
+      "actor_id": "greg/codex",
+      "actor_kind": "agent"
+    }
+  },
+  "activity": {
+    "central": {
+      "f67b3273c9e98ad1f0bd576bcb374cf9e5a0c112b4865da61877008273dd3ef9": {
+        "activity_id": "f67b3273c9e98ad1f0bd576bcb374cf9e5a0c112b4865da61877008273dd3ef9",
+        "task_id": "01a06ea1-9756-7733-9143-11b881c2bcc9",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "greg/codex",
+          "actor_kind": "agent"
+        },
+        "state": "finished",
+        "state_revision": 2,
+        "event_id": "e929e9877b6e63947250c92d1e59f4b1f195484294a86f3ebdbd5d7022d1e91a"
+      }
+    }
+  }
+}

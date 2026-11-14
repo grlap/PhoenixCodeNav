@@ -1,0 +1,50 @@
+{
+  "id": "01a069b3-c8fc-7d03-9cec-0e043a298f9b",
+  "external_ref": null,
+  "title": "Cover every Windows non-regular argument-source attribute",
+  "outcome": "The Windows argument-source predicate is pinned for Directory, Device, ReparsePoint, and realistic regular-file attributes.",
+  "acceptance": [
+    "Unit coverage rejects Directory, Device, and ReparsePoint individually and accepts a realistic regular-file attribute combination."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "task",
+  "priority": 3,
+  "labels": [
+    "review",
+    "testing"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "completed",
+  "parent_id": null,
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": {
+    "summary": "The Windows argument-source predicate test now rejects ReparsePoint, Directory, and Device attributes and accepts a realistic regular-file attribute combination.",
+    "completed_at": "2026-09-04T00:22:17.691763700Z",
+    "actor": {
+      "actor_id": "termal",
+      "actor_kind": "agent"
+    }
+  },
+  "activity": {
+    "central": {
+      "7dad76775420866dc2747729a1862088a62e71f56291f48cba576942b675e03d": {
+        "activity_id": "7dad76775420866dc2747729a1862088a62e71f56291f48cba576942b675e03d",
+        "task_id": "01a069b3-c8fc-7d03-9cec-0e043a298f9b",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "termal",
+          "actor_kind": "agent"
+        },
+        "state": "finished",
+        "state_revision": 2,
+        "event_id": "3380bd6cb29a3d9d858f2a8fb22cdb711049c77aa5c491042884d170be5fa776"
+      }
+    }
+  }
+}

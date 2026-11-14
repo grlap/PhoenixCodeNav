@@ -1,0 +1,27 @@
+{
+  "id": "01a06b2c-4534-7960-9771-15607b0e0a33",
+  "external_ref": null,
+  "title": "Decide and document the wrapper ShowFile timeout policy across Batch43 tests",
+  "outcome": "Batch43 wrapper tests consistently distinguish test-side process ceilings from intentional product-default timeout coverage.",
+  "acceptance": [
+    "Remaining wrapper-based ShowFile call sites either use TestGit.ProcessExitTimeoutMilliseconds or explicitly document that they retain the 4000 ms product-default timeout coverage"
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "task",
+  "priority": 3,
+  "labels": [
+    "review",
+    "testing"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "open",
+  "parent_id": "01a06884-02d0-7041-91b2-f26f6dd69464",
+  "child_requirement": "optional",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": null
+}

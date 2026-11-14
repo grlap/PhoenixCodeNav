@@ -1,0 +1,55 @@
+{
+  "id": "01a07846-1a12-7cc1-84f6-7fdc7a895050",
+  "external_ref": null,
+  "title": "Packet 4c: Document ownership boundaries for NavigationTools partials",
+  "outcome": "Each NavigationTools tool-surface partial states an accurate Owns/Does-not-own boundary and the core partial describes only retained construction, state, test seams, and shared helpers.",
+  "acceptance": [
+    "Capabilities, Search, Outline, Definition, Implementations, References, Projects, and Index partials each have an accurate two-to-three-line Owns/Does-not-own summary",
+    "NavigationTools.cs summary is narrowed to construction, state, test seams, and shared helpers",
+    "Wording is approved before editing, full quality gates pass, and dual-agent review passes"
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "task",
+  "priority": 3,
+  "labels": [
+    "agent-experience",
+    "architecture",
+    "maintainability",
+    "review",
+    "structure"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "completed",
+  "parent_id": "01a0748d-2331-79e0-a8a4-c57d709cd778",
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": {
+    "summary": "Committed and pushed packet 4c as 108dbaed3051e32a1b329ec189f5bd7bf10294bb: accurate Owns/Does-not-own summaries across the NavigationTools tool-surface partials, a narrowed core NavigationTools summary covering retained construction/state/test seams/shared helpers, and the Search extraction-seam blank-line cleanup.",
+    "completed_at": "2026-09-06T21:53:46.097840400Z",
+    "actor": {
+      "actor_id": "greg/codex",
+      "actor_kind": "agent"
+    }
+  },
+  "activity": {
+    "central": {
+      "8670fdb38e08bc3931164f872e8a658a209487ad918220a6eccda3336fc4ab5b": {
+        "activity_id": "8670fdb38e08bc3931164f872e8a658a209487ad918220a6eccda3336fc4ab5b",
+        "task_id": "01a07846-1a12-7cc1-84f6-7fdc7a895050",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "greg/codex",
+          "actor_kind": "agent"
+        },
+        "state": "finished",
+        "state_revision": 2,
+        "event_id": "a97c9683aa30b2877abdfecedc0c689c26f49dd1698dc7046376778298366d69"
+      }
+    }
+  }
+}

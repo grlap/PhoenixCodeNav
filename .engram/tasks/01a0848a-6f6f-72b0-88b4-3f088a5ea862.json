@@ -1,0 +1,52 @@
+{
+  "id": "01a0848a-6f6f-72b0-88b4-3f088a5ea862",
+  "external_ref": null,
+  "title": "Seed default F# semantic Configuration and Platform",
+  "outcome": "Seed default F# semantic Configuration and Platform",
+  "acceptance": [
+    "Decisive default and override regressions pass, full quality gates are green, and complete independent dual review has no Critical or High findings.",
+    "Explicit project values and imported assignments remain authoritative; default values participate consistently in writer capture and query evaluation; existing target-framework policy and numeric limits remain unchanged.",
+    "The exact net8.0 and Configuration|Platform Debug|AnyCPU condition evaluates successfully without explicit Configuration or Platform declarations."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "bug",
+  "priority": 1,
+  "labels": [
+    "fsharp",
+    "semantic-correctness"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "completed",
+  "parent_id": null,
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": {
+    "summary": "Delivered local v0.12.96/schema34: missing Configuration=Debug and Platform=AnyCPU filled after successful early props imports before project body. Exact net8.0 Debug|AnyCPU condition succeeds; imported complete/empty/incomplete values and later ordinary overrides retained, TFM policy and numeric limits unchanged. Writer/query use same context, cold/delta probes converge. Required High ordering and capability margin children completed. Final original Codex6494/Claude6495 same-session review CLEAN, full stable nine-path union, no Critical/High; source/test inspection distinguished from parent runtime evidence. Final gates: default-context19/19; format clean; Release0 warnings/errors; complete suite1626 passed/0 failed/2 expected Unix-only skips; fresh pinned MCP47/0; website167/167. Optional Medium w-e1d361ee05f5 and Lows w-4f8d8a323d10/w-1c8a60581fa5 remain open; future configurable context w-021b4dd77644 deferred. No code edits after gates/review. Not committed, pushed or installed; those actions require current changeset authority.",
+    "completed_at": "2026-09-09T05:47:53.276376800Z",
+    "actor": {
+      "actor_id": "greg/codex",
+      "actor_kind": "agent"
+    }
+  },
+  "activity": {
+    "central": {
+      "3d0825636a6145c791afb29a75bcc3410e875c465079caed4ee2f353c2664b73": {
+        "activity_id": "3d0825636a6145c791afb29a75bcc3410e875c465079caed4ee2f353c2664b73",
+        "task_id": "01a0848a-6f6f-72b0-88b4-3f088a5ea862",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "greg/codex",
+          "actor_kind": "agent"
+        },
+        "state": "finished",
+        "state_revision": 2,
+        "event_id": "9675c7fec610013b603e824e161c3fa1ec941eba20b1037500f65946b03c4d36"
+      }
+    }
+  }
+}

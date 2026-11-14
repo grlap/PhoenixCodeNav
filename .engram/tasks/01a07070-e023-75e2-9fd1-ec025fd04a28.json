@@ -1,0 +1,50 @@
+{
+  "id": "01a07070-e023-75e2-9fd1-ec025fd04a28",
+  "external_ref": null,
+  "title": "Pin includeTests false on a non-test F# project",
+  "outcome": "F# references test filtering is regression-protected for both test and non-test owners.",
+  "acceptance": [
+    "A decisive test proves includeTests=false preserves references in a non-test selected project."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "task",
+  "priority": 2,
+  "labels": [
+    "review",
+    "testing"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "completed",
+  "parent_id": "01a063dd-54f4-7d22-8647-caeefe63e36e",
+  "child_requirement": "optional",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": {
+    "summary": "Added decisive non-test includeTests=false coverage.",
+    "completed_at": "2026-09-05T07:42:56.306988200Z",
+    "actor": {
+      "actor_id": "greg/codex",
+      "actor_kind": "agent"
+    }
+  },
+  "activity": {
+    "central": {
+      "6c61fac7c9061606bb7693a5ff63b0e0f07388fce05ddd29c30038a0502b565b": {
+        "activity_id": "6c61fac7c9061606bb7693a5ff63b0e0f07388fce05ddd29c30038a0502b565b",
+        "task_id": "01a07070-e023-75e2-9fd1-ec025fd04a28",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "greg/codex",
+          "actor_kind": "agent"
+        },
+        "state": "finished",
+        "state_revision": 2,
+        "event_id": "38f550ed3b3f1c208c86f00b6eebb75e312527a4a09b7d0ad1c79d651472a894"
+      }
+    }
+  }
+}

@@ -1,0 +1,71 @@
+{
+  "id": "01a063dd-599c-7253-999b-3eff45080442",
+  "external_ref": null,
+  "title": "Build F# Stage 2B project and package reference closure",
+  "outcome": "Build F# Stage 2B ProjectReference closure",
+  "acceptance": [
+    "Build F# Stage 2B project and package reference closure is done"
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "task",
+  "priority": 1,
+  "labels": [],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "completed",
+  "parent_id": "01a063dd-5401-7f73-a63d-bea317b25710",
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": {
+    "summary": "Delivered Phoenix v0.12.83 F# exact-TFM ProjectReference semantic closure across the frozen 18-path packet: bounded recursive capture from one pinned index snapshot; SDK transitive/default and disabled/legacy direct-only compiler policy; in-memory FCS referenced-project options with consistent virtual references; dependency-first per-node checks with merged, physically deduplicated diagnostics; root-only reference counting; separate closure declaration attribution; fail-closed host-path, language, cycle, companion, binary, and budget contracts; manifest/version/docs and decisive regressions. Both original Codex and Claude reviewers completed same-session verification CLEAN with no Critical/High findings. Release build, uninterrupted complete suite, external fresh-index MCP integration, website verifier, scoped format/diff checks, and live closure/paired canaries are green. Website-owner files were excluded.",
+    "completed_at": "2026-09-05T10:49:18.452291300Z",
+    "actor": {
+      "actor_id": "greg/codex",
+      "actor_kind": "agent"
+    }
+  },
+  "activity": {
+    "central": {
+      "00fa8a43dd9e3e7711729fb46070c53c74cc66b0837278ada2c6e2f7fd429a6f": {
+        "activity_id": "00fa8a43dd9e3e7711729fb46070c53c74cc66b0837278ada2c6e2f7fd429a6f",
+        "task_id": "01a063dd-599c-7253-999b-3eff45080442",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "greg/codex",
+          "actor_kind": "agent"
+        },
+        "state": "finished",
+        "state_revision": 2,
+        "event_id": "6bd8a859017f06b47b1561d45740d57bfbaca13898331b7a96872067a9dd85e1"
+      },
+      "a9055dddc48f1e2fe8d4e7fa7b86393bde8286901a5193b462dd210483a7279a": {
+        "activity_id": "a9055dddc48f1e2fe8d4e7fa7b86393bde8286901a5193b462dd210483a7279a",
+        "task_id": "01a063dd-599c-7253-999b-3eff45080442",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "fable",
+          "actor_kind": "agent"
+        },
+        "state": "released",
+        "state_revision": 2,
+        "event_id": "0fd5c8297b325b5bab78ed98a3843afd367d7109182788407d0009970296fdbf"
+      },
+      "cde00e1ba0d1b4467314e33b2c0bd8e2f4d1fbbf4b7c55340a1356cfcdd89548": {
+        "activity_id": "cde00e1ba0d1b4467314e33b2c0bd8e2f4d1fbbf4b7c55340a1356cfcdd89548",
+        "task_id": "01a063dd-599c-7253-999b-3eff45080442",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "greg/codex",
+          "actor_kind": "agent"
+        },
+        "state": "released",
+        "state_revision": 2,
+        "event_id": "d6cd85de7e1b35bd79ed55e65351a9632e656cc0eb6422053e5b776f16a5c165"
+      }
+    }
+  }
+}

@@ -1,0 +1,56 @@
+{
+  "id": "01a08298-8f83-78d0-8c70-d2a2cb8c99dc",
+  "external_ref": null,
+  "title": "Extract the language-neutral bounded MSBuild expression core",
+  "outcome": "F# semantic evaluation delegates property expansion and condition evaluation to a reusable language-neutral core with no behavior change.",
+  "acceptance": [
+    "F# routes every semantic property expansion and Import/Choose condition through the shared core with existing causes, limits, and results preserved.",
+    "Focused F# evaluator tests, full repository gates, and one dual-agent adversarial review pass.",
+    "The shared core owns scalar property expansion, condition parsing/evaluation, reserved safe intrinsic dispatch, cancellation, and existing expression bounds."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "task",
+  "priority": 1,
+  "labels": [
+    "architecture",
+    "csharp",
+    "fsharp",
+    "msbuild",
+    "semantic",
+    "semantic-correctness"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "completed",
+  "parent_id": "01a08293-8ab2-7ee0-876d-1fe9ef5192ee",
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": {
+    "summary": "Extracted and validated the reusable bounded MSBuild scalar-expression core; F# delegates all property and condition evaluation through it with stable behavior.",
+    "completed_at": "2026-09-08T20:25:41.957004900Z",
+    "actor": {
+      "actor_id": "greg/codex",
+      "actor_kind": "agent"
+    }
+  },
+  "activity": {
+    "central": {
+      "d6e4d50cfd7707f7c5a8a3f9dae3699cc0a4377bdb38e4f6f9345939e0c3949d": {
+        "activity_id": "d6e4d50cfd7707f7c5a8a3f9dae3699cc0a4377bdb38e4f6f9345939e0c3949d",
+        "task_id": "01a08298-8f83-78d0-8c70-d2a2cb8c99dc",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "greg/codex",
+          "actor_kind": "agent"
+        },
+        "state": "finished",
+        "state_revision": 2,
+        "event_id": "8a03d4e5defb9851e0a2bc7f61b9691d7f58cb7b556db7bd77af6520ff383ccd"
+      }
+    }
+  }
+}

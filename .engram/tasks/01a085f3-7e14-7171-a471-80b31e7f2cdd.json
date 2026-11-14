@@ -1,0 +1,31 @@
+{
+  "id": "01a085f3-7e14-7171-a471-80b31e7f2cdd",
+  "external_ref": null,
+  "title": "Cover global package projection with paired removal in F# semantic integration",
+  "outcome": "Cover global package projection with paired removal in F# semantic integration",
+  "acceptance": [
+    "A normal FCS-level CPM integration case combines an enabled global reference with paired ordinary reference/version removal and resolves the expected package symbol."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "task",
+  "priority": 3,
+  "labels": [
+    "architecture",
+    "csharp",
+    "fsharp",
+    "semantic-correctness",
+    "shared-packages",
+    "testing"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "open",
+  "parent_id": null,
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": null
+}

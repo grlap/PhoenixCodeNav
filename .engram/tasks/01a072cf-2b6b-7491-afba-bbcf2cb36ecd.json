@@ -1,0 +1,31 @@
+{
+  "id": "01a072cf-2b6b-7491-afba-bbcf2cb36ecd",
+  "external_ref": null,
+  "title": "Reproduce and attribute shared-daemon handshake timeout under heavy index load",
+  "outcome": "Determine why an accepted shared-daemon connection can exceed the frozen five-second authority handshake while a large index is loading, and fix the proven scheduling or transport cause without raising a timeout.",
+  "acceptance": [
+    "A deterministic test reproduces the accepted-connection daemon_handshake_timeout under the proven load or scheduling condition, or evidence rules out Phoenix and identifies the external cause.",
+    "The proven root cause is fixed without introducing or raising a count, byte, or time limit, and the regression test passes."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "bug",
+  "priority": 2,
+  "labels": [
+    "daemon",
+    "diagnostics",
+    "mcp-contract",
+    "performance",
+    "windows"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "open",
+  "parent_id": "01a072be-3cbf-7900-8086-ffa06c2a8671",
+  "child_requirement": "optional",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": null
+}

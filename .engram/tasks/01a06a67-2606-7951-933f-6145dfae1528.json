@@ -1,0 +1,52 @@
+{
+  "id": "01a06a67-2606-7951-933f-6145dfae1528",
+  "external_ref": null,
+  "title": "Record the b4b9ff5 full-suite failure classification",
+  "outcome": "The gate failure fixed inside b4b9ff5 has a complete durable classification tying the failed test, cause, evidence, action, and final green rerun to the commit.",
+  "acceptance": [
+    "Phoenix::Fable receives the same classification and the Engram reference.",
+    "The record names the failed test and gate command, explains why the former retry predicate was insufficient, classifies the issue as a test-convergence defect rather than a product correctness race, and records the focused and full-suite green evidence."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "chore",
+  "priority": 3,
+  "labels": [
+    "audit",
+    "gate-failure",
+    "testing"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "completed",
+  "parent_id": null,
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": {
+    "summary": "Recorded and delivered the complete b4b9ff5 full-suite failure classification.",
+    "completed_at": "2026-09-04T03:12:48.765812500Z",
+    "actor": {
+      "actor_id": "termal",
+      "actor_kind": "agent"
+    }
+  },
+  "activity": {
+    "central": {
+      "dfbec5e325d33a0a29d4ceb5dfd219f3ec519ab1064176b1a4458f7773e3c95c": {
+        "activity_id": "dfbec5e325d33a0a29d4ceb5dfd219f3ec519ab1064176b1a4458f7773e3c95c",
+        "task_id": "01a06a67-2606-7951-933f-6145dfae1528",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "termal",
+          "actor_kind": "agent"
+        },
+        "state": "finished",
+        "state_revision": 2,
+        "event_id": "39bd5bc8189d5ad20f4d8b11e6369734071500f78738795d8c9611dfd9bfe5ea"
+      }
+    }
+  }
+}

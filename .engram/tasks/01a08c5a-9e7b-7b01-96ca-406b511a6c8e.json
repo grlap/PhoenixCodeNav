@@ -1,0 +1,31 @@
+{
+  "id": "01a08c5a-9e7b-7b01-96ca-406b511a6c8e",
+  "external_ref": null,
+  "title": "Restore trim/case and unrecognized-value coverage for PHOENIX_FSHARP_PROJECT_MODEL",
+  "outcome": "Restore trim/case and unrecognized-value coverage for PHOENIX_FSHARP_PROJECT_MODEL",
+  "acceptance": [
+    "Environment-selection regression covers padded mixed-case EVALUATED selecting Evaluated, and unrecognized nonempty value selecting Simple with emitted warning; existing immutable-manager and explicit-constructor controls remain."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "task",
+  "priority": 3,
+  "labels": [
+    "default",
+    "fsharp",
+    "project-model",
+    "review",
+    "semantic",
+    "testing"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "superseded",
+  "parent_id": "01a08c08-cb5e-7b42-a5e0-1f02de81511c",
+  "child_requirement": "optional",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": "01a08c62-5bc9-79f0-9fc2-85a2ed0d7c4b",
+  "disposal_reason": "Continue this accepted nonblocking review follow-up independently after the reviewed parent delivery was committed and pushed as051cbc2; preserve original parent provenance and acceptance.",
+  "completion": null
+}

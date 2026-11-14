@@ -1,0 +1,53 @@
+{
+  "id": "01a0878d-bcc4-7b40-b666-6910452d64bd",
+  "external_ref": null,
+  "title": "Return success exit status after a recovered shim session",
+  "outcome": "Return success exit status after a recovered shim session",
+  "acceptance": [
+    "completed recovered session exits0; never-recovered stays4. Deferred from current correction round."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "bug",
+  "priority": 3,
+  "labels": [
+    "agent-experience",
+    "daemon",
+    "mcp-contract",
+    "recovery",
+    "review"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "completed",
+  "parent_id": null,
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": {
+    "summary": "Fixed and dual-reviewed: orderly recovered shim exits0; never-recovered and subsequently observed transport-loss controls exit4. Real-process test-first RED/GREEN, full2132/0 suite and external gates passed. No daemon-liveness guarantee; no commit/push performed. Optional cleanup-test follow-up remains open.",
+    "completed_at": "2026-09-11T02:47:13.707031700Z",
+    "actor": {
+      "actor_id": "greg/codex",
+      "actor_kind": "agent"
+    }
+  },
+  "activity": {
+    "central": {
+      "96c0c0b3d95f3a9b18fd09828d9fff593c514f455f98e7bf46859c3ecaf84c83": {
+        "activity_id": "96c0c0b3d95f3a9b18fd09828d9fff593c514f455f98e7bf46859c3ecaf84c83",
+        "task_id": "01a0878d-bcc4-7b40-b666-6910452d64bd",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "greg/codex",
+          "actor_kind": "agent"
+        },
+        "state": "finished",
+        "state_revision": 2,
+        "event_id": "ebd1178b92f8c0f1504277aa00f72bc1940872f3f6aac7f3aee4b2837b3451ef"
+      }
+    }
+  }
+}

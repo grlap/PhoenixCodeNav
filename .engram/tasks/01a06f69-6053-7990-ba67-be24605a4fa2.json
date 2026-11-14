@@ -1,0 +1,33 @@
+{
+  "id": "01a06f69-6053-7990-ba67-be24605a4fa2",
+  "external_ref": null,
+  "title": "Restructure the website: cut ~40%, reorder sections, two labels per section, jargon pass",
+  "outcome": "The website reads as a product page for a .NET developer new to MCP: shorter, ordered for comprehension, every claim still aligned with the README, with the honesty/boundary message stated at most twice.",
+  "acceptance": [
+    "Adversarial /review-changes round complete with no Critical/High finding",
+    "Desktop (1440x900) and mobile (390x844) scroll heights are at least 35% below the 2026-09-04 baseline of 13,237px / 19,754px",
+    "Each section carries at most two stacked labels (rail number + H2), not three",
+    "Jargon list (line-addressable, warm semantic estate, owner-aware contexts, typed actionable cause, portal release-notes prose) rewritten for the stated audience",
+    "No product claim on the page contradicts README.md or docs/; nothing invented",
+    "Section order follows the plan approved by Greg; redundant sections (trust rail, One toolbox, anatomy steps 03/05, word-tile Proof) are removed or merged as approved",
+    "node website/verify.mjs passes with checks updated to the new structure, dotnet build 0 warnings, dotnet test green, test-roslyn-mcp.ps1 green"
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "task",
+  "priority": 1,
+  "labels": [
+    "design",
+    "website"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "open",
+  "parent_id": null,
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": null
+}

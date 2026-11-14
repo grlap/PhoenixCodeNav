@@ -1,0 +1,30 @@
+{
+  "id": "01a089a2-46d6-78a0-85e6-a9aae1ac742c",
+  "external_ref": null,
+  "title": "Make MSBuild diagnostic enablement forgiving or explicitly observable",
+  "outcome": "Make MSBuild diagnostic enablement forgiving or explicitly observable",
+  "acceptance": [
+    "Choose and document an operator-facing enablement contract: accept trimmed ordinary truthy spellings case-insensitively, or emit a single safe diagnostic for an unrecognized nonempty setting.",
+    "Product tests pin enabled, disabled and unrecognized values, without logging raw MSBuild data into ordinary telemetry or changing evaluator behavior."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "task",
+  "priority": 3,
+  "labels": [
+    "agent-experience",
+    "diagnostics",
+    "msbuild",
+    "review"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "open",
+  "parent_id": "01a08976-b0f6-7c30-a489-74bbf23b3ba8",
+  "child_requirement": "optional",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": null
+}

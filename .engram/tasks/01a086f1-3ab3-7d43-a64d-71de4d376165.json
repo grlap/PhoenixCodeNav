@@ -1,0 +1,27 @@
+{
+  "id": "01a086f1-3ab3-7d43-a64d-71de4d376165",
+  "external_ref": null,
+  "title": "Preserve testhost crash sequence and diagnostics during quality gates",
+  "outcome": "Preserve testhost crash sequence and diagnostics during quality gates",
+  "acceptance": [
+    "A future aborted full-suite run leaves a durable test-execution sequence and available crash diagnostics sufficient to distinguish host interruption from an unhandled product exception; existing tests and gate criteria remain unchanged."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "task",
+  "priority": 3,
+  "labels": [
+    "diagnostics",
+    "testing"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "open",
+  "parent_id": null,
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": null
+}

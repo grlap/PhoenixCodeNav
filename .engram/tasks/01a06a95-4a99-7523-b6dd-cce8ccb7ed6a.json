@@ -1,0 +1,52 @@
+{
+  "id": "01a06a95-4a99-7523-b6dd-cce8ccb7ed6a",
+  "external_ref": null,
+  "title": "Propagate context_pack semantic fail reasons into cold-start retry metadata",
+  "outcome": "Propagate context_pack semantic fail reasons into cold-start retry metadata",
+  "acceptance": [
+    "A production-shaped DefinitionAsync failure with FailReason cluster_cold_load and null PartialReason yields the documented partialReason, retryRecommended:true, and retryHint.",
+    "Permanent semantic failures do not acquire retry metadata."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "bug",
+  "priority": 1,
+  "labels": [
+    "mcp-contract",
+    "review",
+    "semantic-correctness"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "completed",
+  "parent_id": "01a06999-065c-7ef3-97f9-6bc6a6d1436d",
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": {
+    "summary": "context_pack now propagates DefinitionAsync FailReason into typed partial/retry metadata, with a production-shaped regression.",
+    "completed_at": "2026-09-04T05:09:32.777444300Z",
+    "actor": {
+      "actor_id": "termal",
+      "actor_kind": "agent"
+    }
+  },
+  "activity": {
+    "central": {
+      "bf161b218b6599971076f4253b9ffccfed738325a429b567a082bf74badddae1": {
+        "activity_id": "bf161b218b6599971076f4253b9ffccfed738325a429b567a082bf74badddae1",
+        "task_id": "01a06a95-4a99-7523-b6dd-cce8ccb7ed6a",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "termal",
+          "actor_kind": "agent"
+        },
+        "state": "finished",
+        "state_revision": 2,
+        "event_id": "58e36dda6dc2177cf23505c24186c9a07947898293fccaa9c86730a97aa9550d"
+      }
+    }
+  }
+}

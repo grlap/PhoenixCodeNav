@@ -1,0 +1,52 @@
+{
+  "id": "01a088e8-33f9-7923-a05c-8bab44a2b150",
+  "external_ref": null,
+  "title": "Reproduce MSBuild import-sentinel evaluation and compare F# with C#",
+  "outcome": "Reproduce MSBuild import-sentinel evaluation and compare F# with C#",
+  "acceptance": [
+    "A minimal reproduction records absent/assigned/incomplete import-sentinel behavior before any product fix, checks assignment inside an imported targets file and a second guarded import, compares native MSBuild and the real Phoenix C# path with F#, and preserves exact expected/actual evidence."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "research",
+  "priority": 2,
+  "labels": [
+    "csharp",
+    "fsharp",
+    "msbuild",
+    "semantic-correctness"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "completed",
+  "parent_id": null,
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": {
+    "summary": "Diagnostic research completed without product changes: reproduced missing import-sentinel and separate ordering failures, compared actual C# compiler model and native MSBuild, retained runnable fixtures/results, filed three unimplemented followups.",
+    "completed_at": "2026-09-10T01:30:02.597619600Z",
+    "actor": {
+      "actor_id": "greg/codex",
+      "actor_kind": "agent"
+    }
+  },
+  "activity": {
+    "central": {
+      "3c96494bb9addae7474a27722c374994ef49aff338c8395d2240d8909a0b727e": {
+        "activity_id": "3c96494bb9addae7474a27722c374994ef49aff338c8395d2240d8909a0b727e",
+        "task_id": "01a088e8-33f9-7923-a05c-8bab44a2b150",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "greg/codex",
+          "actor_kind": "agent"
+        },
+        "state": "finished",
+        "state_revision": 2,
+        "event_id": "51b20d361642ae0ed8372b708b2dc891389761aaf13a0fce9ed4a8eeb93385d6"
+      }
+    }
+  }
+}

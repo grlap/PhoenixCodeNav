@@ -1,0 +1,49 @@
+{
+  "id": "01a06ee4-424e-7601-82cb-d4fdd1ac1ea4",
+  "external_ref": null,
+  "title": "Prepare website changes for independent review",
+  "outcome": "Stage exactly the four completed website files and hand the unchanged validated packet to the coordinator for the parent-session dual review.",
+  "acceptance": [
+    "No source normalization, commit, or push is performed.",
+    "Only website/index.html, website/script.js, website/styles.css, and website/verify.mjs are staged, with no other changes.",
+    "Website verification passes and the coordinator receives the exact staged path inventory."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "task",
+  "priority": 1,
+  "labels": [],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "completed",
+  "parent_id": null,
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": {
+    "summary": "Frozen four-file staged website packet validated and handed to Fable for Greg-triggered dual review.",
+    "completed_at": "2026-09-05T00:08:00.820086800Z",
+    "actor": {
+      "actor_id": "greg/codex",
+      "actor_kind": "agent"
+    }
+  },
+  "activity": {
+    "central": {
+      "ba322a4f460d8dd1ee2e3b2bf89d2f1981c14a9ab08d454d609e5fe2f3559bec": {
+        "activity_id": "ba322a4f460d8dd1ee2e3b2bf89d2f1981c14a9ab08d454d609e5fe2f3559bec",
+        "task_id": "01a06ee4-424e-7601-82cb-d4fdd1ac1ea4",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "greg/codex",
+          "actor_kind": "agent"
+        },
+        "state": "finished",
+        "state_revision": 2,
+        "event_id": "c8db08d26b73035ac072d3646bb5cf748a7f4124cf5e331e23099837b46c655a"
+      }
+    }
+  }
+}

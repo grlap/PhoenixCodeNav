@@ -1,0 +1,28 @@
+{
+  "id": "01a0773d-178f-7af2-97d0-931e11a84c56",
+  "external_ref": null,
+  "title": "Cover the unsupported_language supportedLanguages negative branch",
+  "outcome": "The F# unsupported-language envelope keeps type_hierarchy on the C#-only branch while supported F# operations remain advertised accurately.",
+  "acceptance": [
+    "A contract test calls UnsupportedLanguageForTest for compile-owned F# type_hierarchy and asserts supportedLanguages is exactly [cs] and availableForFile excludes type_hierarchy."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "task",
+  "priority": 2,
+  "labels": [
+    "mcp-contract",
+    "review",
+    "testing"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "open",
+  "parent_id": null,
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": null
+}

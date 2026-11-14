@@ -1,0 +1,50 @@
+{
+  "id": "01a07101-07dd-7c92-9f7f-da7bb6744d87",
+  "external_ref": null,
+  "title": "Separate returned closure declarations from declarations not returned",
+  "outcome": "Separate returned closure declarations from declarations not returned",
+  "acceptance": [
+    "The legacy declarationsOutsideSelectedProjectCount retains its not-returned meaning and closure attribution is separately observable and tested."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "bug",
+  "priority": 2,
+  "labels": [
+    "mcp-contract",
+    "review"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "completed",
+  "parent_id": "01a063dd-599c-7253-999b-3eff45080442",
+  "child_requirement": "optional",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": {
+    "summary": "Preserved declarationsOutsideSelectedProjectCount as omitted declarations and added declarationsFromProjectReferenceClosureCount for returned dependency declarations.",
+    "completed_at": "2026-09-05T10:39:23.960280Z",
+    "actor": {
+      "actor_id": "greg/codex",
+      "actor_kind": "agent"
+    }
+  },
+  "activity": {
+    "central": {
+      "c783e3752e1aec79d3bac597459bacaa2154a91d630cbf7a5ae01d1bc38cc514": {
+        "activity_id": "c783e3752e1aec79d3bac597459bacaa2154a91d630cbf7a5ae01d1bc38cc514",
+        "task_id": "01a07101-07dd-7c92-9f7f-da7bb6744d87",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "greg/codex",
+          "actor_kind": "agent"
+        },
+        "state": "finished",
+        "state_revision": 2,
+        "event_id": "8f6ff506f82cfa5891774c0c74e9ae2550eeb77ba7dc3115bc7a73b8c319b7ad"
+      }
+    }
+  }
+}

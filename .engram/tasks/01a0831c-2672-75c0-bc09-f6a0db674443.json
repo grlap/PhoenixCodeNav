@@ -1,0 +1,57 @@
+{
+  "id": "01a0831c-2672-75c0-bc09-f6a0db674443",
+  "external_ref": null,
+  "title": "Reject unproven host path aliases in indexed Exists evaluation",
+  "outcome": "Host path aliases never turn an existing indexed file into a proven-absent Exists result.",
+  "acceptance": [
+    "Case-spelling misses on case-insensitive non-Windows hosts do not become proven absence.",
+    "Windows trailing-dot aliases fail closed rather than return Exists=false."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "bug",
+  "priority": 1,
+  "labels": [
+    "architecture",
+    "csharp",
+    "fsharp",
+    "index-freshness",
+    "msbuild",
+    "review",
+    "semantic",
+    "semantic-correctness"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "completed",
+  "parent_id": "01a082f6-d27c-74c1-861e-b692f43dbf1b",
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": {
+    "summary": "Removed the false-absence API path; unresolved host aliases return unknown, with a Windows trailing-dot alias regression and same-session verification.",
+    "completed_at": "2026-09-08T22:41:39.019410400Z",
+    "actor": {
+      "actor_id": "greg/codex",
+      "actor_kind": "agent"
+    }
+  },
+  "activity": {
+    "central": {
+      "d90414cf584b652a2e1cdd6522369c9b87beb2bcf67a76c03adf2cd67b3bdd2b": {
+        "activity_id": "d90414cf584b652a2e1cdd6522369c9b87beb2bcf67a76c03adf2cd67b3bdd2b",
+        "task_id": "01a0831c-2672-75c0-bc09-f6a0db674443",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "greg/codex",
+          "actor_kind": "agent"
+        },
+        "state": "finished",
+        "state_revision": 2,
+        "event_id": "2509c222bf2335144446639a230fbe2c3859ac9837a6403f896147041c9c1ba6"
+      }
+    }
+  }
+}

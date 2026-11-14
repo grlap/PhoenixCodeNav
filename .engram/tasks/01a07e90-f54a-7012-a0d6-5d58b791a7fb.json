@@ -1,0 +1,29 @@
+{
+  "id": "01a07e90-f54a-7012-a0d6-5d58b791a7fb",
+  "external_ref": null,
+  "title": "Fully qualify the FlushWrites citation in the Unix write-cache investigation",
+  "outcome": "Fully qualify the FlushWrites citation in the Unix write-cache investigation",
+  "acceptance": [
+    "The citation at document line 111 uses external/roslyn/src/Workspaces/Core/Portable/Storage/SQLite/v2/SQLitePersistentStorage_FlushWrites.cs, matching sibling citations."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "task",
+  "priority": 3,
+  "labels": [
+    "documentation",
+    "macos",
+    "review",
+    "roslyn"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "open",
+  "parent_id": "01a07e3d-bac1-79d0-adab-a74a1fcce07a",
+  "child_requirement": "optional",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": null
+}

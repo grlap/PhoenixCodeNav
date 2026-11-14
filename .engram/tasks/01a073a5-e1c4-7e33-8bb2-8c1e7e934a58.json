@@ -1,0 +1,28 @@
+{
+  "id": "01a073a5-e1c4-7e33-8bb2-8c1e7e934a58",
+  "external_ref": null,
+  "title": "Persist evaluated F# ProjectReference edges for workspace discovery",
+  "outcome": "The index stores bounded property-expanded F# ProjectReference authority so workspace-dependent semantic discovery does not re-evaluate every indexed F# project on each request.",
+  "acceptance": [
+    "A project whose ProjectReference Include uses an evaluated property stores the physical target edge and workspace-dependent F# references can discover it without request-wide graph re-evaluation."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "task",
+  "priority": 2,
+  "labels": [
+    "index-freshness",
+    "performance",
+    "semantic-correctness"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "open",
+  "parent_id": null,
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": null
+}

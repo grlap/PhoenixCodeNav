@@ -1,0 +1,27 @@
+{
+  "id": "01a088a3-8638-70d1-8f88-8a2f6e3c1f98",
+  "external_ref": null,
+  "title": "Catalogue optional-property assumed-empty in the F# partial-reason table",
+  "outcome": "Catalogue optional-property assumed-empty in the F# partial-reason table",
+  "acceptance": [
+    "Suggested fix: add a row: | fsharp_semantic_optional_property_assumed_empty | indexed | An exact absent-property nonempty PropertyGroup guard was skipped under Phoenix's selected assumed-empty analysis default, not a detected build/environment value."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "task",
+  "priority": 3,
+  "labels": [
+    "mcp-contract",
+    "review"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "open",
+  "parent_id": null,
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": null
+}

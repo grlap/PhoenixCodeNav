@@ -1,0 +1,51 @@
+{
+  "id": "01a084a3-0b7c-70b3-880b-8526e2218516",
+  "external_ref": null,
+  "title": "Resolve F# default-context ordering before Directory.Build.props",
+  "outcome": "Resolve F# default-context ordering before Directory.Build.props",
+  "acceptance": [
+    "Original reviewer verifies default-context ordering or explicit model/disclosure addresses the reported silent divergence, with decisive regression."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "bug",
+  "priority": 1,
+  "labels": [
+    "fsharp",
+    "review",
+    "semantic-correctness"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "completed",
+  "parent_id": "01a0848a-6f6f-72b0-88b4-3f088a5ea862",
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": {
+    "summary": "Fixed: defaults TryAdd only after successful early Directory.Build.props/Directory.Packages.props evaluation; complete, empty and incomplete imported values preserved. Original reviewers Codex session-6494 and Claude session-6495 verified full stable nine-path union CLEAN, no Critical/High, final wait delegation-wait-9d7f2f1c-2405-4c59-a36a-433051648b8d. Parent ran decisive RED 5 failed/4 passed before fix, GREEN default-context 19/19 after, full suite 1626/0 with 2 expected skips, Release zero warnings/errors, MCP47/0 and website167/167. Reviewers verified source/tests, did not rerun gates. Local changes remain uncommitted.",
+    "completed_at": "2026-09-09T05:47:29.076122900Z",
+    "actor": {
+      "actor_id": "greg/codex",
+      "actor_kind": "agent"
+    }
+  },
+  "activity": {
+    "central": {
+      "7a2fbd4f066994bce4f2c248852717328e953f07307755b951a81deec29af524": {
+        "activity_id": "7a2fbd4f066994bce4f2c248852717328e953f07307755b951a81deec29af524",
+        "task_id": "01a084a3-0b7c-70b3-880b-8526e2218516",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "greg/codex",
+          "actor_kind": "agent"
+        },
+        "state": "finished",
+        "state_revision": 2,
+        "event_id": "4c3ab562409c970d0728c18ccef46b8fdd723e45285810339e2b6ec5f48480e3"
+      }
+    }
+  }
+}

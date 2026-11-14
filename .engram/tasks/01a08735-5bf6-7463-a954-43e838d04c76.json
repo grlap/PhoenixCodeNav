@@ -1,0 +1,54 @@
+{
+  "id": "01a08735-5bf6-7463-a954-43e838d04c76",
+  "external_ref": null,
+  "title": "Recover the existing MCP session after a transient daemon handshake timeout",
+  "outcome": "A transient daemon_handshake_timeout must not permanently strand an existing MCP session in UnavailableMcpShim after the daemon becomes responsive; recover without restarting the agent or rebuilding the index.",
+  "acceptance": [
+    "A deterministic end-to-end regression initializes an MCP session after a forced authority-handshake timeout, then allows the daemon to respond and proves a subsequent tool call succeeds through that same MCP session and proxy process.",
+    "Continued daemon unavailability remains honestly reported; recovery preserves MCP initialization and request/response correlation without replaying already-dispatched mutating calls.",
+    "Recovery requires neither daemon/index restart nor longer handshake deadlines; full quality gates and adversarial review pass."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "bug",
+  "priority": 1,
+  "labels": [
+    "agent-experience",
+    "daemon",
+    "mcp-contract",
+    "recovery"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "completed",
+  "parent_id": null,
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": {
+    "summary": "Same initialized MCP session recovers from transient handshake failure through an existing daemon, without restart, rebuild, deadline changes or replay. Added transport/result-loss recovery, phase-aware protocol handling, correlated cancellation, relay shutdown cleanup, and unavailable capability disclosure. Decisive RED/GREEN, full gates and original dual verification complete.",
+    "completed_at": "2026-09-09T19:03:16.444958300Z",
+    "actor": {
+      "actor_id": "greg/codex",
+      "actor_kind": "agent"
+    }
+  },
+  "activity": {
+    "central": {
+      "aabb44b1dc9181d3c0c0a5ce8ac940ddf52e078512574184a20b897f7ff7a455": {
+        "activity_id": "aabb44b1dc9181d3c0c0a5ce8ac940ddf52e078512574184a20b897f7ff7a455",
+        "task_id": "01a08735-5bf6-7463-a954-43e838d04c76",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "greg/codex",
+          "actor_kind": "agent"
+        },
+        "state": "finished",
+        "state_revision": 2,
+        "event_id": "14e1134d221875250da2e0e4e9c0e3045ac74a37aa7fc78e728209a0da5d9a9d"
+      }
+    }
+  }
+}

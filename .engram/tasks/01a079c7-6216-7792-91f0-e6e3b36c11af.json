@@ -1,0 +1,27 @@
+{
+  "id": "01a079c7-6216-7792-91f0-e6e3b36c11af",
+  "external_ref": null,
+  "title": "Hoist gate incomplete-reason strings into shared constants",
+  "outcome": "Prevent silent drift between gate incomplete-reason emitters and the cleanup-only verdict classifier.",
+  "acceptance": [
+    "The cleanup incomplete-reason add sites and cleanup-only classifier reference one script-scope definition for each reason."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "task",
+  "priority": 3,
+  "labels": [
+    "architecture",
+    "review"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "open",
+  "parent_id": null,
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": null
+}

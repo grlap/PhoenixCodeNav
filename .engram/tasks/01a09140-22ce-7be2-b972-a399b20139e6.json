@@ -1,0 +1,54 @@
+{
+  "id": "01a09140-22ce-7be2-b972-a399b20139e6",
+  "external_ref": null,
+  "title": "Assert clean real-proxy shutdowns emit no daemon recovery warning",
+  "outcome": "The real-process recovered and never-recovered shutdown controls check their captured stderr as well as exit status, exposing any spurious recovery cleanup warning.",
+  "acceptance": [
+    "Existing real-proxy recovered-clean (exit 0) and never-recovered (exit 4) shutdown cases assert the captured stderr contains no Phoenix warning: daemon recovery line, while still checking their exit codes and retaining process cleanup."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "task",
+  "priority": 3,
+  "labels": [
+    "architecture",
+    "daemon",
+    "mcp-contract",
+    "observability",
+    "review",
+    "testing"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "completed",
+  "parent_id": null,
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": {
+    "summary": "All3 actual-proxy shutdown cases now assert stderr has no Phoenix warning: daemon recovery prefix as well as exact exit status. Synthetic-warning mutant failed all3; removed. Implemented and full-union reviewed; not committed or pushed.",
+    "completed_at": "2026-09-11T17:18:17.442502500Z",
+    "actor": {
+      "actor_id": "greg/codex",
+      "actor_kind": "agent"
+    }
+  },
+  "activity": {
+    "central": {
+      "10ca71ce04958535114fc73900a59f5a68a6b331ec20ad415282d9e3659ec1b8": {
+        "activity_id": "10ca71ce04958535114fc73900a59f5a68a6b331ec20ad415282d9e3659ec1b8",
+        "task_id": "01a09140-22ce-7be2-b972-a399b20139e6",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "greg/codex",
+          "actor_kind": "agent"
+        },
+        "state": "finished",
+        "state_revision": 2,
+        "event_id": "513422314dafb79c9bb0bc835a275b62ca887909b8868b9c4ed9da77a3692f61"
+      }
+    }
+  }
+}

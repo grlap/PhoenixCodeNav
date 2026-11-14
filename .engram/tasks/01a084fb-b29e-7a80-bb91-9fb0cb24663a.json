@@ -1,0 +1,52 @@
+{
+  "id": "01a084fb-b29e-7a80-bb91-9fb0cb24663a",
+  "external_ref": null,
+  "title": "Restore canonical self-default test discrimination",
+  "outcome": "Restore canonical self-default test discrimination",
+  "acceptance": [
+    "Canonical self-default test uses non-seeded property and fails if self-default mechanism is removed."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "task",
+  "priority": 3,
+  "labels": [
+    "fsharp",
+    "review",
+    "semantic-correctness",
+    "testing"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "completed",
+  "parent_id": null,
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": {
+    "summary": "Canonical self-default test now uses non-seeded LocalFlavor, restoring regression discrimination. Explicitly verified by Claude6497 and covered by Codex6496 CLEAN; focused30/30 and full1633/0.",
+    "completed_at": "2026-09-09T07:04:57.850684300Z",
+    "actor": {
+      "actor_id": "greg/codex",
+      "actor_kind": "agent"
+    }
+  },
+  "activity": {
+    "central": {
+      "090e7dd50a30ad1bc0379c87c4de6411740a8a905bfb4722ebc7f3afb1a0fb3a": {
+        "activity_id": "090e7dd50a30ad1bc0379c87c4de6411740a8a905bfb4722ebc7f3afb1a0fb3a",
+        "task_id": "01a084fb-b29e-7a80-bb91-9fb0cb24663a",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "greg/codex",
+          "actor_kind": "agent"
+        },
+        "state": "finished",
+        "state_revision": 2,
+        "event_id": "82907eb952a21919a975067d4dd6a8f9081667689d3100658a9429e0c36004dc"
+      }
+    }
+  }
+}

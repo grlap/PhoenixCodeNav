@@ -1,0 +1,50 @@
+{
+  "id": "01a08cf1-5487-7bd2-bcd1-4c9e948df9c9",
+  "external_ref": null,
+  "title": "Simplify README into a concise product and setup entry point",
+  "outcome": "Simplify README into a concise product and setup entry point",
+  "acceptance": [
+    "README retains product purpose, install requirements, usable MCP/CLI examples, essential model/coverage caveats and links to detailed docs.",
+    "Remove duplicated reference-level detail without changing product behavior or unrelated edits; validate local links and website checks."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "task",
+  "priority": 2,
+  "labels": [
+    "documentation"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "completed",
+  "parent_id": null,
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": {
+    "summary": "README reduced by75% to199 lines, focusing on purpose, setup, first query, key limitations and links to existing technical documentation.",
+    "completed_at": "2026-09-10T20:12:44.684545400Z",
+    "actor": {
+      "actor_id": "greg/codex",
+      "actor_kind": "agent"
+    }
+  },
+  "activity": {
+    "central": {
+      "49f7ee41beb3b4df19503d532d22cc4686d46762edd71761419579a70bd2841b": {
+        "activity_id": "49f7ee41beb3b4df19503d532d22cc4686d46762edd71761419579a70bd2841b",
+        "task_id": "01a08cf1-5487-7bd2-bcd1-4c9e948df9c9",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "greg/codex",
+          "actor_kind": "agent"
+        },
+        "state": "finished",
+        "state_revision": 2,
+        "event_id": "49cc5c607db6f4fc3f73166f1462025cf4dd9ff5579f1591390bcd7de094109f"
+      }
+    }
+  }
+}

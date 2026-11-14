@@ -1,0 +1,78 @@
+{
+  "id": "01a063dd-d691-7c51-af3b-f39a31c33ea0",
+  "external_ref": null,
+  "title": "Emit zeroResult metadata for one-character misses",
+  "outcome": "Every eligible first-page symbol miss reports reason and effective scope even when the query is too short for suggestions.",
+  "acceptance": [
+    "A decisive product test distinguishes it from the previous metadata-free miss.",
+    "A one-character search_symbol miss includes zeroResult reason, scope, and an optional-or-empty suggestions contract."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "bug",
+  "priority": 2,
+  "labels": [
+    "agent-experience",
+    "mcp-contract",
+    "navigation",
+    "review",
+    "testing"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "completed",
+  "parent_id": "01a063dd-84ee-78b2-be90-a2b82477e5de",
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": {
+    "summary": "Closed one-character zero-result metadata coverage in fdcd442.",
+    "completed_at": "2026-09-04T17:06:49.706289900Z",
+    "actor": {
+      "actor_id": "greg/codex",
+      "actor_kind": "agent"
+    }
+  },
+  "activity": {
+    "central": {
+      "4eed3ab29f1b6fa0992f67dc24a05bf6f00caea9aa0cef6d3b5c1bf28ad40dab": {
+        "activity_id": "4eed3ab29f1b6fa0992f67dc24a05bf6f00caea9aa0cef6d3b5c1bf28ad40dab",
+        "task_id": "01a063dd-d691-7c51-af3b-f39a31c33ea0",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "fable",
+          "actor_kind": "agent"
+        },
+        "state": "released",
+        "state_revision": 2,
+        "event_id": "008e94316e3d427d8cf3db6fdbf8c808111a9986fc6e3d10f426899281ead9f3"
+      },
+      "b049ba19b5418813aada7beeec4bc0959838de60069e8a92a1b2c8e97135ba1f": {
+        "activity_id": "b049ba19b5418813aada7beeec4bc0959838de60069e8a92a1b2c8e97135ba1f",
+        "task_id": "01a063dd-d691-7c51-af3b-f39a31c33ea0",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "greg/codex",
+          "actor_kind": "agent"
+        },
+        "state": "started",
+        "state_revision": 1,
+        "event_id": "b049ba19b5418813aada7beeec4bc0959838de60069e8a92a1b2c8e97135ba1f"
+      },
+      "c6107e3fe962a6166c616855751dae2d838bdf52f070064fdc99478081be47c5": {
+        "activity_id": "c6107e3fe962a6166c616855751dae2d838bdf52f070064fdc99478081be47c5",
+        "task_id": "01a063dd-d691-7c51-af3b-f39a31c33ea0",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "greg/codex",
+          "actor_kind": "agent"
+        },
+        "state": "finished",
+        "state_revision": 2,
+        "event_id": "21a7a1a1a11fcca9c9bd75747da64b4cade3a52bbd7a9d585f563bc40ff6c623"
+      }
+    }
+  }
+}

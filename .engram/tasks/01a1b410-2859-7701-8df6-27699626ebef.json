@@ -1,0 +1,58 @@
+{
+  "id": "01a1b410-2859-7701-8df6-27699626ebef",
+  "external_ref": null,
+  "title": "Make Phoenix preparation and test dependencies work with only the .NET 10 toolchain",
+  "outcome": "A fresh host can prepare/build/test Phoenix with .NET10 without separately installing older framework/SDK packs; preserve meaningful semantic behavior coverage and explicitly report legacy-target coverage consequences.",
+  "acceptance": [
+    "Inventory production/test targets and distinguish incidental fixture targets from dedicated legacy compatibility coverage; record an independent design consultation before meaningful implementation.",
+    "Update preparation, fixture dependencies and matching repository instructions for the approved .NET10-only setup, with no silent newer-reference substitution or skipped failing tests.",
+    "Run the complete automated gate on the final change set and complete independent dual review; report the exact effect on legacy-framework compatibility tests and any remaining prerequisites."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "task",
+  "priority": 1,
+  "labels": [
+    "infrastructure",
+    "net10",
+    "testing"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "open",
+  "parent_id": null,
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": null,
+  "activity": {
+    "central": {
+      "4e6fe6e65e884bdfab464bae75cb22d0": {
+        "activity_id": "4e6fe6e65e884bdfab464bae75cb22d0",
+        "task_id": "01a1b410-2859-7701-8df6-27699626ebef",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "greg/codex",
+          "actor_kind": "agent"
+        },
+        "state": "started",
+        "state_revision": 1,
+        "event_id": "4e6fe6e65e884bdfab464bae75cb22d0"
+      },
+      "6908e7d2739a43d8996f2fcf4abf23f0": {
+        "activity_id": "6908e7d2739a43d8996f2fcf4abf23f0",
+        "task_id": "01a1b410-2859-7701-8df6-27699626ebef",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "greg/codex",
+          "actor_kind": "agent"
+        },
+        "state": "started",
+        "state_revision": 1,
+        "event_id": "6908e7d2739a43d8996f2fcf4abf23f0"
+      }
+    }
+  }
+}

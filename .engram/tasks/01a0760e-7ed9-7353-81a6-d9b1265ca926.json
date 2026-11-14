@@ -1,0 +1,64 @@
+{
+  "id": "01a0760e-7ed9-7353-81a6-d9b1265ca926",
+  "external_ref": null,
+  "title": "Pin positive callers and callees claims in the F# boundary detail",
+  "outcome": "The compile-owned F# envelope test fails if the positive callers or body-local callees disclosure disappears.",
+  "acceptance": [
+    "FSharpTierATests asserts the callers workspace-dependent phrase, the body-local callees closure phrase, and the fail-closed multi-target compatibility clause."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "task",
+  "priority": 3,
+  "labels": [
+    "fsharp",
+    "mcp-contract",
+    "review",
+    "testing"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "completed",
+  "parent_id": "01a07525-eb9d-7582-ba71-88ce823725cd",
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": {
+    "summary": "Delivered in commit f2ca4732f5d7e9bae176219e35f89f37200bbf73: compile-owned F# detail tests positively pin workspace callers, body-local closure callees, and the fail-closed compatibility clause.",
+    "completed_at": "2026-09-06T15:02:33.587810700Z",
+    "actor": {
+      "actor_id": "greg/codex",
+      "actor_kind": "agent"
+    }
+  },
+  "activity": {
+    "central": {
+      "122247202785f3db726c7a167128096ca09941ca203e02053eae653f909adbb7": {
+        "activity_id": "122247202785f3db726c7a167128096ca09941ca203e02053eae653f909adbb7",
+        "task_id": "01a0760e-7ed9-7353-81a6-d9b1265ca926",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "greg/codex",
+          "actor_kind": "agent"
+        },
+        "state": "finished",
+        "state_revision": 2,
+        "event_id": "ab77b1c02f371ec6b58bf33b346f8d78a943dcb42cb183e54c989c42d5f8a6be"
+      },
+      "9adc3dfacf564fe5cf1fc20f95b516e7c1f42386cc98da15f11bd902052680d1": {
+        "activity_id": "9adc3dfacf564fe5cf1fc20f95b516e7c1f42386cc98da15f11bd902052680d1",
+        "task_id": "01a0760e-7ed9-7353-81a6-d9b1265ca926",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "greg/codex",
+          "actor_kind": "agent"
+        },
+        "state": "started",
+        "state_revision": 1,
+        "event_id": "9adc3dfacf564fe5cf1fc20f95b516e7c1f42386cc98da15f11bd902052680d1"
+      }
+    }
+  }
+}

@@ -1,0 +1,27 @@
+{
+  "id": "01a1af79-fbeb-7351-8e2e-0a8937b1511b",
+  "external_ref": null,
+  "title": "Avoid runtime-ignore writes into uninitialized submodule directories",
+  "outcome": "Prerequisite setup leaves missing or mismatched upstream checkouts untouched so the documented submodule initialization remains usable.",
+  "acceptance": [
+    "Create .codenav/.gitignore only after confirming the checkout is an initialized repository at its pinned commit; an uninitialized checkout remains empty and preparation provides the pinned-initialization advice."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "bug",
+  "priority": 2,
+  "labels": [
+    "infrastructure",
+    "review"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "open",
+  "parent_id": "01a1af5f-6e22-7f83-8e42-5033267d578c",
+  "child_requirement": "optional",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": null
+}

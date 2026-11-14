@@ -1,0 +1,47 @@
+{
+  "id": "01a06a00-8b2d-7ab0-bbbf-b4dd387126dc",
+  "external_ref": null,
+  "title": "Ship a phoenix-cli agent skill (SKILL.md) that teaches shell agents the CLI contract",
+  "outcome": "Shell-only agents get the same agent-first guidance MCP hosts receive at initialize, without a second source of truth for tool parameters",
+  "acceptance": [
+    "skills/phoenix-cli/SKILL.md exists with Agent Skills frontmatter (name, description); it covers only contract: workspace-root precedence, discovery verbs (tools/help/schema, offline, no daemon), invocation grammar (--param, --flag/--flag=false, --json, --args-file path|-, --pretty, exact camelCase wire names, reserved names), one-JSON-document stdout, exit codes 0/1/2/3/130, error ids and retryable vs retryRecommended/retryHint, daemon_request_rejected re-run-once, cold start via server_capabilities index.state/progress, and the same tool-routing order as the MCP server instructions; it lists no tool parameters (phoenix help <tool> is the source of truth); README documents installation for Claude Code, Copilot, and Codex; no tests (docs), reviewed by the dual review as docs"
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "feature",
+  "priority": 2,
+  "labels": [],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "completed",
+  "parent_id": null,
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": {
+    "summary": "Shipped and committed the repository-installable Phoenix CLI skill template, build/publish distribution link, exact README installation workflow, canonical agent boundary/routing guidance, and the full-suite-derived Git convergence regression fix.",
+    "completed_at": "2026-09-04T03:08:55.564402200Z",
+    "actor": {
+      "actor_id": "termal",
+      "actor_kind": "agent"
+    }
+  },
+  "activity": {
+    "central": {
+      "c4fe6c6f4a713d04f6c6e656a8598d851a974899ac140554f655d5b1d7ea1bcc": {
+        "activity_id": "c4fe6c6f4a713d04f6c6e656a8598d851a974899ac140554f655d5b1d7ea1bcc",
+        "task_id": "01a06a00-8b2d-7ab0-bbbf-b4dd387126dc",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "termal",
+          "actor_kind": "agent"
+        },
+        "state": "finished",
+        "state_revision": 2,
+        "event_id": "6e1e394e04813f75126050db1eb8b854697938d072fcba088d8a9b88942bc208"
+      }
+    }
+  }
+}

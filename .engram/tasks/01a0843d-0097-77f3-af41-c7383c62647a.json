@@ -1,0 +1,56 @@
+{
+  "id": "01a0843d-0097-77f3-af41-c7383c62647a",
+  "external_ref": null,
+  "title": "Support compound F# self-default conditions with target framework guards",
+  "outcome": "Support compound F# self-default conditions with target framework guards",
+  "acceptance": [
+    "Exact EnableReplaceBindingRedirects unset-self AND net8.0 condition evaluates without error, sets default only for matching TFM and preserves an existing value.",
+    "Focused regression fails before fix and passes after; full gates and independent dual review pass.",
+    "Unrelated unresolved properties remain fail-closed; supported boolean grouping preserves semantics; numeric limits unchanged."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "bug",
+  "priority": 1,
+  "labels": [
+    "architecture",
+    "csharp",
+    "fsharp",
+    "msbuild",
+    "semantic",
+    "semantic-correctness"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "completed",
+  "parent_id": "01a08298-8fc2-7781-90fb-e9d128515475",
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": {
+    "summary": "Implemented and verified compound F# self-default conditions including exact EnableReplaceBindingRedirects AND net8.0 blocker, preserved existing values/unrelated unknown refusal and all limits; regression RED then GREEN, full gates green, complete independent Codex+Claude review no Critical/High. Non-blocking follow-ups recorded. Local source and Release build ready; commit and deployment not performed.",
+    "completed_at": "2026-09-09T04:27:29.707057900Z",
+    "actor": {
+      "actor_id": "greg/codex",
+      "actor_kind": "agent"
+    }
+  },
+  "activity": {
+    "central": {
+      "31fa981305ef9997c4a94b0eb893821dfa938d187ccdc2b070e58f0e434d379f": {
+        "activity_id": "31fa981305ef9997c4a94b0eb893821dfa938d187ccdc2b070e58f0e434d379f",
+        "task_id": "01a0843d-0097-77f3-af41-c7383c62647a",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "greg/codex",
+          "actor_kind": "agent"
+        },
+        "state": "finished",
+        "state_revision": 2,
+        "event_id": "ddd979a8f7d9992dc40822e8fceb5f74db18e5dc5a6477dac3c23b3bdcf6fb55"
+      }
+    }
+  }
+}

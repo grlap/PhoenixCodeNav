@@ -1,0 +1,52 @@
+{
+  "id": "01a08f1f-ec8e-7983-aa25-17225b3cc594",
+  "external_ref": null,
+  "title": "Make recovery exit status and runtime-directory preparation classification discoverable",
+  "outcome": "Deploy checks can identify the two additional recovery contracts, or their documented fix classification is explicit.",
+  "acceptance": [
+    "The recovered-shim exit-status contract and preparation-time runtime-directory refusal each have an appropriate singular features[] ID, or their fix-only treatment is explicitly resolved against the standing feature-ID directive; normal/unavailable manifest assertions preserve the existing 2 KiB reserve and all existing claims without changing limits."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "task",
+  "priority": 3,
+  "labels": [
+    "agent-experience",
+    "daemon",
+    "mcp-contract",
+    "review"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "completed",
+  "parent_id": null,
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": {
+    "summary": "Explicitly classified runtime preparation, retirement authority, recovered-shim exit and cancellation invalidation as repairs of existing contracts covered by v0.12.108, after independent consultation; manifest IDs and unchanged reserve validated. Reviewer Low retained.",
+    "completed_at": "2026-09-11T07:26:10.474513600Z",
+    "actor": {
+      "actor_id": "greg/codex",
+      "actor_kind": "agent"
+    }
+  },
+  "activity": {
+    "central": {
+      "b2552b56ed05154ef8598c419760869cb31fc8a4efa2e64e1f0091a38f7800cd": {
+        "activity_id": "b2552b56ed05154ef8598c419760869cb31fc8a4efa2e64e1f0091a38f7800cd",
+        "task_id": "01a08f1f-ec8e-7983-aa25-17225b3cc594",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "greg/codex",
+          "actor_kind": "agent"
+        },
+        "state": "finished",
+        "state_revision": 2,
+        "event_id": "92195fe3e6f4bde93e3dc1f6533457402fa1b8e9c911ed40ae8ffda218f4f52e"
+      }
+    }
+  }
+}

@@ -1,0 +1,30 @@
+{
+  "id": "01a070b9-4915-72d2-84c1-24951673378c",
+  "external_ref": null,
+  "title": "Cache the F# owner-coverage partition per context selection",
+  "outcome": "Truncated F# files compute retained-owner coverage once per selection instead of rebuilding the retained-context key set for each exposed count.",
+  "acceptance": [
+    "Cold-build and delta owner-coverage parity tests remain green without changing any context limit",
+    "FSharpParsingContextSelection computes OwnerProjectCoverage at most once per selection or both indexing call sites read and destructure it once"
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "task",
+  "priority": 3,
+  "labels": [
+    "fsharp",
+    "indexing",
+    "performance",
+    "review"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "open",
+  "parent_id": "01a063dd-5be1-7d10-93e2-4b0167ce4c1c",
+  "child_requirement": "optional",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": null
+}

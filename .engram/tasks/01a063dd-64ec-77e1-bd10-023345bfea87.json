@@ -1,0 +1,40 @@
+{
+  "id": "01a063dd-64ec-77e1-bd10-023345bfea87",
+  "external_ref": null,
+  "title": "index_worktree: support anchored mutation on macOS",
+  "outcome": "index_worktree: support anchored mutation on macOS",
+  "acceptance": [
+    "index_worktree: support anchored mutation on macOS is done"
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "task",
+  "priority": 1,
+  "labels": [],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "open",
+  "parent_id": null,
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": null,
+  "activity": {
+    "central": {
+      "1355845f0febfcdb01b3564bb9442a4437e1672b2cf0aecefe13504f1f918a60": {
+        "activity_id": "1355845f0febfcdb01b3564bb9442a4437e1672b2cf0aecefe13504f1f918a60",
+        "task_id": "01a063dd-64ec-77e1-bd10-023345bfea87",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "fable",
+          "actor_kind": "agent"
+        },
+        "state": "released",
+        "state_revision": 2,
+        "event_id": "07fa923d264468e4e759cae0a0a2f1bdb0547cb68b6c16c4981fee4f355c601b"
+      }
+    }
+  }
+}

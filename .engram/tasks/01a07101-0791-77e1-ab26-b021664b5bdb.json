@@ -1,0 +1,50 @@
+{
+  "id": "01a07101-0791-77e1-ab26-b021664b5bdb",
+  "external_ref": null,
+  "title": "Restore fail-fast F# semantic source admission",
+  "outcome": "Restore fail-fast F# semantic source admission",
+  "acceptance": [
+    "Aggregate file-count admission occurs before source materialization and source bytes are reserved incrementally without changing the authorized limits."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "bug",
+  "priority": 2,
+  "labels": [
+    "performance",
+    "review"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "completed",
+  "parent_id": "01a063dd-599c-7253-999b-3eff45080442",
+  "child_requirement": "optional",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": {
+    "summary": "Restored file-count admission before any source content read and incremental UTF-8 byte admission before retaining each source.",
+    "completed_at": "2026-09-05T10:39:23.777988300Z",
+    "actor": {
+      "actor_id": "greg/codex",
+      "actor_kind": "agent"
+    }
+  },
+  "activity": {
+    "central": {
+      "12e2fb2c14475c9746abe891855dfa96694eb388919bd1763071aaae19cfe871": {
+        "activity_id": "12e2fb2c14475c9746abe891855dfa96694eb388919bd1763071aaae19cfe871",
+        "task_id": "01a07101-0791-77e1-ab26-b021664b5bdb",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "greg/codex",
+          "actor_kind": "agent"
+        },
+        "state": "finished",
+        "state_revision": 2,
+        "event_id": "ed76f51f7a98e61043dc550dfbbc0b7199f455844b7448bbae5c54badf9e5b2f"
+      }
+    }
+  }
+}

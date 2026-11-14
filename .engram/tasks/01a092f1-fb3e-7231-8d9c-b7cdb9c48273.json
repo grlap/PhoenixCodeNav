@@ -1,0 +1,64 @@
+{
+  "id": "01a092f1-fb3e-7231-8d9c-b7cdb9c48273",
+  "external_ref": null,
+  "title": "Assert unresolved F# telemetry for top-level-error navigation envelopes",
+  "outcome": "Telemetry outcome tests cover the top-level fsharp_symbol_not_resolved envelope used by references and assembly-content navigation, independently of symbol_at's found:false/no-error form.",
+  "acceptance": [
+    "A mutation mapping the top-level fsharp_symbol_not_resolved error to telemetry error fails the new assertions; final restored tests pass without changing response confidence or error contracts.",
+    "Route the existing References noSymbol case plus one callers or implementations unresolved case through the same-stream Observe helper, requiring exactly one semanticOp with result unresolved and matching timing/reason."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "task",
+  "priority": 3,
+  "labels": [
+    "mcp-contract",
+    "review",
+    "testing"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "completed",
+  "parent_id": "01a06ed4-c728-7810-ab28-c2101db7acdf",
+  "child_requirement": "optional",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": {
+    "summary": "Published 4294b363770d85fda540a2265b79e51bc6196fcf; installed v0.12.109 at C:/tools/phoenix-pilot. Verified resolved in the final reviewed bytes: FIFO Observe covers references/implementations/callers unresolved envelopes and typed capture-refusal errors. The unresolved-to-error mutation fails both selected tests; restored focused and full suite pass.",
+    "completed_at": "2026-09-12T01:10:01.746985Z",
+    "actor": {
+      "actor_id": "greg/codex",
+      "actor_kind": "agent"
+    }
+  },
+  "activity": {
+    "central": {
+      "f5d8062774860049a91dae721603dc029657737b0f19ef4247fb92435b29ea6c": {
+        "activity_id": "f5d8062774860049a91dae721603dc029657737b0f19ef4247fb92435b29ea6c",
+        "task_id": "01a092f1-fb3e-7231-8d9c-b7cdb9c48273",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "greg/codex",
+          "actor_kind": "agent"
+        },
+        "state": "finished",
+        "state_revision": 2,
+        "event_id": "37cba999d3b99d8801977c09700ec09d26823cea7fe789b751f883608e431993"
+      },
+      "ff8faa992d20f2d02d009b26438ac34afaa7c94bd23c9c2311c9f6de77cbc462": {
+        "activity_id": "ff8faa992d20f2d02d009b26438ac34afaa7c94bd23c9c2311c9f6de77cbc462",
+        "task_id": "01a092f1-fb3e-7231-8d9c-b7cdb9c48273",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "greg/codex",
+          "actor_kind": "agent"
+        },
+        "state": "released",
+        "state_revision": 2,
+        "event_id": "b1bfb9c07626cb1bcb517797b717a25105fab311dc7afd215859ff8c3a97084b"
+      }
+    }
+  }
+}

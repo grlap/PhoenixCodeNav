@@ -1,0 +1,30 @@
+{
+  "id": "01a07047-eed8-7882-bca1-7f241cfe4eaa",
+  "external_ref": null,
+  "title": "Decide whether CodeNav.GitTests keeps xUnit diagnostic messages enabled",
+  "outcome": "The Git test runner either disables diagnosticMessages or documents why the extra permanent runner output is intentional.",
+  "acceptance": [
+    "diagnosticMessages is false, or the CodeNav.GitTests project comment records why it remains enabled"
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "task",
+  "priority": 3,
+  "labels": [
+    "fsharp",
+    "mcp-contract",
+    "review",
+    "semantic",
+    "testing"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "superseded",
+  "parent_id": "01a06f9c-dffa-7d91-92bf-2df02b3ce8c1",
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": "01a072a7-9132-7372-b9ef-dbfb8406b7ed",
+  "disposal_reason": "Preserve this independent Low review follow-up as optional; its original required-child attachment incorrectly blocked completion of the already-shipped v0.12.80 confidence feature.",
+  "completion": null
+}

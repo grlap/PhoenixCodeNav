@@ -1,0 +1,53 @@
+{
+  "id": "01a0910d-dce0-7440-a1b6-b1ed34981a72",
+  "external_ref": null,
+  "title": "Make DaemonProxy stream-pair handling consistent before unavailable fallback",
+  "outcome": "DaemonProxy has one consistent supplied-stream contract independent of whether startup reaches relay or the unavailable fallback; partial pairs cannot cause a fallback-only unhandled ArgumentException.",
+  "acceptance": [
+    "A focused regression exercises input-only and output-only calls through DaemonProxy.RunAsync, including pre-relay failure, and demonstrates consistent validation at entry or documented per-side normalization; neither/both-stream controls preserve existing relay and typed-unavailable behavior."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "bug",
+  "priority": 3,
+  "labels": [
+    "architecture",
+    "daemon",
+    "mcp-contract",
+    "review",
+    "testing"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "completed",
+  "parent_id": null,
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": {
+    "summary": "Confirmed with four RED actual-proxy cases and fixed by validating the stream pair at RunAsync entry. Focused 19/19 and complete parent gates pass; complete Codex6664/Claude6665 full-union review CLEAN. Four optional Low follow-up tasks recorded, one false-positive isolation finding rejected with source evidence. No commit or push.",
+    "completed_at": "2026-09-11T16:14:33.071528Z",
+    "actor": {
+      "actor_id": "greg/codex",
+      "actor_kind": "agent"
+    }
+  },
+  "activity": {
+    "central": {
+      "31de9bd8a565ed22f6610237d23189e58db5f0cad47af0e8d3acc4b918fb3508": {
+        "activity_id": "31de9bd8a565ed22f6610237d23189e58db5f0cad47af0e8d3acc4b918fb3508",
+        "task_id": "01a0910d-dce0-7440-a1b6-b1ed34981a72",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "greg/codex",
+          "actor_kind": "agent"
+        },
+        "state": "finished",
+        "state_revision": 2,
+        "event_id": "e90ea57d1f906389324b70278ca89972a0eeec01bce0ee6c87ee3fd49b6d24c3"
+      }
+    }
+  }
+}

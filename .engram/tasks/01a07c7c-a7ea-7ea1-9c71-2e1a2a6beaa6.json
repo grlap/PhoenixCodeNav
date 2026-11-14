@@ -1,0 +1,28 @@
+{
+  "id": "01a07c7c-a7ea-7ea1-9c71-2e1a2a6beaa6",
+  "external_ref": null,
+  "title": "Fail the gate clearly on zeroed PE build outputs",
+  "outcome": "Fail the gate clearly on zeroed PE build outputs",
+  "acceptance": [
+    "Before tests launch, the gate reports and fails on a built PE file whose MZ header is missing",
+    "The check does not modify or repair build outputs"
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "task",
+  "priority": 3,
+  "labels": [
+    "infrastructure",
+    "testing"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "open",
+  "parent_id": null,
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": null
+}

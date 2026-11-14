@@ -1,0 +1,82 @@
+{
+  "id": "01a11bfa-786c-79a2-99d0-9e44c4d4e340",
+  "external_ref": null,
+  "title": "Validate TermAl C# test runner compatibility against Phoenix",
+  "outcome": "Real Phoenix Windows dotnet test/TRX runs provide reproducible runner compatibility evidence without Phoenix product changes.",
+  "acceptance": [
+    "Provide a reproducible PASS command, artifact path and runner outcome against a Phoenix C# test project.",
+    "Provide a deliberate FAIL and a missing-artifact case with correct runner classification and preserved evidence.",
+    "Report commands, artifacts, outcomes and any blockers to TermAl::Fable2 and Engram::Advisor; keep Phoenix product files unchanged."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "research",
+  "priority": 2,
+  "labels": [
+    "coordination",
+    "runner-compatibility",
+    "testing"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "open",
+  "parent_id": null,
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": null,
+  "activity": {
+    "central": {
+      "a380469b2a45423994eac7d490c5ce96": {
+        "activity_id": "a380469b2a45423994eac7d490c5ce96",
+        "task_id": "01a11bfa-786c-79a2-99d0-9e44c4d4e340",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "greg/codex",
+          "actor_kind": "agent"
+        },
+        "state": "started",
+        "state_revision": 1,
+        "event_id": "a380469b2a45423994eac7d490c5ce96"
+      },
+      "c86a52d19744472199e41e3d161fd5c7": {
+        "activity_id": "c86a52d19744472199e41e3d161fd5c7",
+        "task_id": "01a11bfa-786c-79a2-99d0-9e44c4d4e340",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "greg/codex",
+          "actor_kind": "agent"
+        },
+        "state": "started",
+        "state_revision": 1,
+        "event_id": "c86a52d19744472199e41e3d161fd5c7"
+      },
+      "e47f21587c854db8b25053ee84febced": {
+        "activity_id": "e47f21587c854db8b25053ee84febced",
+        "task_id": "01a11bfa-786c-79a2-99d0-9e44c4d4e340",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "greg/codex",
+          "actor_kind": "agent"
+        },
+        "state": "released",
+        "state_revision": 2,
+        "event_id": "b6ac0cea9a884131a82eaa0c6be5b663"
+      },
+      "f85320a2dcc047e5859164ad8d476d74": {
+        "activity_id": "f85320a2dcc047e5859164ad8d476d74",
+        "task_id": "01a11bfa-786c-79a2-99d0-9e44c4d4e340",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "greg/codex",
+          "actor_kind": "agent"
+        },
+        "state": "started",
+        "state_revision": 1,
+        "event_id": "f85320a2dcc047e5859164ad8d476d74"
+      }
+    }
+  }
+}

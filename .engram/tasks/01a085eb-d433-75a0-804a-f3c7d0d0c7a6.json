@@ -1,0 +1,31 @@
+{
+  "id": "01a085eb-d433-75a0-804a-f3c7d0d0c7a6",
+  "external_ref": null,
+  "title": "Guard global package version lookup against inconsistent expansion normalization",
+  "outcome": "Guard global package version lookup against inconsistent expansion normalization",
+  "acceptance": [
+    "Global Include expansion uses consistent normalized identities; inconsistent callback results fail closed rather than throwing a missing-key exception."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "task",
+  "priority": 3,
+  "labels": [
+    "architecture",
+    "correctness",
+    "csharp",
+    "fsharp",
+    "review",
+    "semantic-correctness"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "superseded",
+  "parent_id": "01a0850a-f735-72e3-9ad0-7dcd34f3b95a",
+  "child_requirement": "optional",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": "01a085f3-7dfc-71a1-b428-8c3ff7db57fc",
+  "disposal_reason": "Continue as independent deferred work from completed CPM batch w-7dcd34f3b95a. Read-only verification confirmed parent-completed is the sole availability blocker; preserve acceptance, evidence, priority and deferred implementation status. Tracker repair following Phoenix::Fable mailbox #812; no source or Git changes.",
+  "completion": null
+}

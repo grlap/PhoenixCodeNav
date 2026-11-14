@@ -1,0 +1,27 @@
+{
+  "id": "01a073cf-4587-7911-97f2-2cd77f41f519",
+  "external_ref": null,
+  "title": "Remove unused filtered state from F# reference project scans",
+  "outcome": "The new FSharpReferenceProjectScan shape carries only state consumed by its callers.",
+  "acceptance": [
+    "FSharpReferenceProjectScan.Filtered is removed, or callers consume it instead of re-deriving the same state from Group.Status."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "task",
+  "priority": 3,
+  "labels": [
+    "maintainability",
+    "review"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "open",
+  "parent_id": null,
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": null
+}

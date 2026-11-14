@@ -1,0 +1,63 @@
+{
+  "id": "01a07448-11d5-7d92-b900-888da042aec5",
+  "external_ref": null,
+  "title": "Correct public website F# navigation boundaries",
+  "outcome": "Correct public website F# navigation boundaries",
+  "acceptance": [
+    "website/index.html and website/verify.mjs describe shipped F# implementations and workspace-dependent references without stale selected-project-only or unsupported claims."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "task",
+  "priority": 2,
+  "labels": [
+    "mcp-contract",
+    "review",
+    "website"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "completed",
+  "parent_id": null,
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": {
+    "summary": "Corrected website F# supported navigation and remaining limitations; verifier pins the approved wording and rejects obsolete restrictions.",
+    "completed_at": "2026-09-06T05:24:06.414955700Z",
+    "actor": {
+      "actor_id": "greg/codex",
+      "actor_kind": "agent"
+    }
+  },
+  "activity": {
+    "central": {
+      "e75df9b1cbbb511eeb85a3e26ed56a3cc19574d41e3afa60d26ba5783ee74bb1": {
+        "activity_id": "e75df9b1cbbb511eeb85a3e26ed56a3cc19574d41e3afa60d26ba5783ee74bb1",
+        "task_id": "01a07448-11d5-7d92-b900-888da042aec5",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "greg/codex",
+          "actor_kind": "agent"
+        },
+        "state": "released",
+        "state_revision": 2,
+        "event_id": "be5b3194dcb77019587537187e9311a64c32219fd7c6d60c96e834ae3840ba5e"
+      },
+      "ff241b4048515f2309630862fe7909c1a94eac8b19fdd8d8ecfffddb2f29d293": {
+        "activity_id": "ff241b4048515f2309630862fe7909c1a94eac8b19fdd8d8ecfffddb2f29d293",
+        "task_id": "01a07448-11d5-7d92-b900-888da042aec5",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "greg/codex",
+          "actor_kind": "agent"
+        },
+        "state": "finished",
+        "state_revision": 2,
+        "event_id": "c545240ff7d2ca15686bd3aa61461acfdea879d0fa36ece1d2ebfbd0c2822717"
+      }
+    }
+  }
+}

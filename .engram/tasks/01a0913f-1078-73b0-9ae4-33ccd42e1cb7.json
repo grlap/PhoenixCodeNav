@@ -1,0 +1,31 @@
+{
+  "id": "01a0913f-1078-73b0-9ae4-33ccd42e1cb7",
+  "external_ref": null,
+  "title": "Clarify the stderr wording for an observed retained reconnect fault",
+  "outcome": "A retained connect-task fault observed during shutdown is described as an observed attempt fault, without implying that it originated in cleanup, while preserving the original result and bounded redacted diagnostics.",
+  "acceptance": [
+    "The completed-connect and in-flight-connect diagnostic tests assert clear retained-attempt wording, exactly one emitted diagnostic across repeated DisposeAsync calls, no exception message or path disclosure, and preservation of the caller result and exit status even when the diagnostic writer fails."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "task",
+  "priority": 3,
+  "labels": [
+    "architecture",
+    "daemon",
+    "mcp-contract",
+    "observability",
+    "review",
+    "testing"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "superseded",
+  "parent_id": "01a0910d-dce0-7440-a1b6-b1ed34981a72",
+  "child_requirement": "optional",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": "01a09140-2280-7980-a47b-9a51ebf2bc07",
+  "disposal_reason": "Continue as independent work. Created as an optional review child under w-b1ed34981a72 as required by the review workflow; that verified stream-pair fix is now complete. Engram's done/show receipt reports this optional child stranded and explicitly recommends detach. Preserve the creation/origin notes and keep this nonblocking Low follow-up actionable without reopening the satisfied parent.",
+  "completion": null
+}

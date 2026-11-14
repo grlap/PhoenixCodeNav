@@ -1,0 +1,64 @@
+{
+  "id": "01a0760e-7eb6-7f01-a7cb-d0ab2d1a4f54",
+  "external_ref": null,
+  "title": "Pin supported and unsupported halves of the F# boundary summary",
+  "outcome": "Capability tests prove each multi-target phrase appears on the correct side of the supported/unsupported boundary.",
+  "acceptance": [
+    "Batch4 assertions bind compatibility fallback to the unsupported half and explicit project/TFM selection plus exact child-TFM matching to the supported half."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "task",
+  "priority": 3,
+  "labels": [
+    "fsharp",
+    "mcp-contract",
+    "review",
+    "testing"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "completed",
+  "parent_id": "01a07525-eb9d-7582-ba71-88ce823725cd",
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": {
+    "summary": "Delivered in commit f2ca4732f5d7e9bae176219e35f89f37200bbf73: the F# boundary summary test splits the two clauses and pins explicit/exact selection to supported and compatibility fallback to unsupported.",
+    "completed_at": "2026-09-06T15:02:33.538135600Z",
+    "actor": {
+      "actor_id": "greg/codex",
+      "actor_kind": "agent"
+    }
+  },
+  "activity": {
+    "central": {
+      "44b469feeaa4bbac5974173e6f43f115eabc37a97e37f688da188f31fce23580": {
+        "activity_id": "44b469feeaa4bbac5974173e6f43f115eabc37a97e37f688da188f31fce23580",
+        "task_id": "01a0760e-7eb6-7f01-a7cb-d0ab2d1a4f54",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "greg/codex",
+          "actor_kind": "agent"
+        },
+        "state": "finished",
+        "state_revision": 2,
+        "event_id": "c89cfc5dd2b3b12b3d1ec145428f38a2bdd689daee8a4f682c3869d43bb90114"
+      },
+      "7d621d48dd80fd3aedc54259c91e781d2677335c295b52a4bcdf716baba7868b": {
+        "activity_id": "7d621d48dd80fd3aedc54259c91e781d2677335c295b52a4bcdf716baba7868b",
+        "task_id": "01a0760e-7eb6-7f01-a7cb-d0ab2d1a4f54",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "greg/codex",
+          "actor_kind": "agent"
+        },
+        "state": "started",
+        "state_revision": 1,
+        "event_id": "7d621d48dd80fd3aedc54259c91e781d2677335c295b52a4bcdf716baba7868b"
+      }
+    }
+  }
+}

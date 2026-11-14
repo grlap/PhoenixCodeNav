@@ -1,0 +1,40 @@
+{
+  "id": "01a063dd-725d-7580-808b-e0202cc53cc9",
+  "external_ref": null,
+  "title": "Give post-aggregation review epoch validation its own capability ID",
+  "outcome": "Give post-aggregation review epoch validation its own capability ID",
+  "acceptance": [
+    "Give post-aggregation review epoch validation its own capability ID is done"
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "task",
+  "priority": 1,
+  "labels": [],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "open",
+  "parent_id": null,
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": null,
+  "activity": {
+    "central": {
+      "e1020ce85599cb610aeb78784b8ef22503673bb72c668fec09bc1659e3eff269": {
+        "activity_id": "e1020ce85599cb610aeb78784b8ef22503673bb72c668fec09bc1659e3eff269",
+        "task_id": "01a063dd-725d-7580-808b-e0202cc53cc9",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "fable",
+          "actor_kind": "agent"
+        },
+        "state": "released",
+        "state_revision": 2,
+        "event_id": "497335b3f49de8fbe9ccfb2e499a84cc1ad832ea989a5ec6b4f155bcadea5612"
+      }
+    }
+  }
+}

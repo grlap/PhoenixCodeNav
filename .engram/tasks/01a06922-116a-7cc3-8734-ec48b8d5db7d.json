@@ -1,0 +1,47 @@
+{
+  "id": "01a06922-116a-7cc3-8734-ec48b8d5db7d",
+  "external_ref": null,
+  "title": "TestGit.Run failure should name the git command and directory again",
+  "outcome": "Test-side git setup failures name the exact command again; the 130 s process-exit ceiling and no-retry policy from the 0.12.73 changeset stay unchanged",
+  "acceptance": [
+    "tests/CodeNav.GitTests/TestGit.cs Run fails with a message containing the git arguments and working directory instead of a bare Assert.NotNull"
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "chore",
+  "priority": 3,
+  "labels": [],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "completed",
+  "parent_id": null,
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": {
+    "summary": "Restored exact git command and working-directory diagnostics for test-side Git failures.",
+    "completed_at": "2026-09-03T23:58:03.030584400Z",
+    "actor": {
+      "actor_id": "termal",
+      "actor_kind": "agent"
+    }
+  },
+  "activity": {
+    "central": {
+      "08e38ef5dcbc6be1045656f91cb9c1d6a4666345a90dbb67bfdacfd901d9fa70": {
+        "activity_id": "08e38ef5dcbc6be1045656f91cb9c1d6a4666345a90dbb67bfdacfd901d9fa70",
+        "task_id": "01a06922-116a-7cc3-8734-ec48b8d5db7d",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "termal",
+          "actor_kind": "agent"
+        },
+        "state": "finished",
+        "state_revision": 2,
+        "event_id": "60368e06b9299b780c9d30560f8d5d495f2f28934c739154108f1e00c8c17899"
+      }
+    }
+  }
+}

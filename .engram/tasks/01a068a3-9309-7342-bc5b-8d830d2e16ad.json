@@ -1,0 +1,53 @@
+{
+  "id": "01a068a3-9309-7342-bc5b-8d830d2e16ad",
+  "external_ref": null,
+  "title": "Clarify Phoenix CLI retry fields",
+  "outcome": "Agents can distinguish CLI-generated retryable guidance from daemon-relayed retryRecommended and retryHint fields.",
+  "acceptance": [
+    "README and agent instructions state which envelope family carries retryable versus retryRecommended and retryHint."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "task",
+  "priority": 3,
+  "labels": [
+    "agent-experience",
+    "cli",
+    "documentation",
+    "mcp-contract",
+    "review"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "completed",
+  "parent_id": "01a06819-d56e-7e42-99e2-d6c75600a4c8",
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": {
+    "summary": "README and agent instructions now distinguish CLI retryable from relayed retryRecommended/retryHint guidance; delivered in eee9ee5.",
+    "completed_at": "2026-09-03T21:35:10.225177500Z",
+    "actor": {
+      "actor_id": "termal",
+      "actor_kind": "agent"
+    }
+  },
+  "activity": {
+    "central": {
+      "bfd7700b355f20cc2cde98dfa8d4a056c052f6618357ddf09d06aa64ac50dd84": {
+        "activity_id": "bfd7700b355f20cc2cde98dfa8d4a056c052f6618357ddf09d06aa64ac50dd84",
+        "task_id": "01a068a3-9309-7342-bc5b-8d830d2e16ad",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "termal",
+          "actor_kind": "agent"
+        },
+        "state": "finished",
+        "state_revision": 2,
+        "event_id": "f444692c1fcf6d92642c4fa06977cb0f06effbd73ac32fde8c8acecb8f04b15f"
+      }
+    }
+  }
+}

@@ -1,0 +1,31 @@
+{
+  "id": "01a11c03-39f5-78f3-9cd0-d5af7075133b",
+  "external_ref": null,
+  "title": "Investigate null DirtyFiles in worktree seed regression",
+  "outcome": "The worktree seed regression either obtains a valid dirt snapshot or reports its prerequisite failure accurately under the concurrent Git suite.",
+  "acceptance": [
+    "WorktreeSeedRecapturesRootSensitiveExistsWithNoProjectChanges(throughManager:false,siblingModel:Evaluated) passes in the complete GitTests project run with normal environment.",
+    "The cause of the observed null DirtyFiles result is established without weakening or skipping assertions."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "bug",
+  "priority": 2,
+  "labels": [
+    "coordination",
+    "git",
+    "observed-failure",
+    "runner-compatibility",
+    "testing"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "open",
+  "parent_id": "01a11bfa-786c-79a2-99d0-9e44c4d4e340",
+  "child_requirement": "optional",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": null
+}

@@ -1,0 +1,53 @@
+{
+  "id": "01a08700-12f6-7d23-a1a5-85424c9d986f",
+  "external_ref": null,
+  "title": "Preserve early Directory.Build.props authority for C# SDK-derived package versions",
+  "outcome": "Preserve early Directory.Build.props authority for C# SDK-derived package versions",
+  "acceptance": [
+    "C# compiler-reference regression covering each SDK flag overridden in Directory.Build.props refuses unproven SDK-dependent versions instead of choosing a seeded-true DLL; unchanged literal versions and explicit central assignments remain supported."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "bug",
+  "priority": 1,
+  "labels": [
+    "csharp",
+    "fsharp",
+    "review",
+    "semantic-correctness",
+    "shared-evaluation"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "completed",
+  "parent_id": "01a086ca-de85-7841-a7b1-82e500b03f41",
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": {
+    "summary": "High fixed and verified by both original reviewers Codex6506/Claude6507 in their same-session continuations. Production caller forwards indexed Directory.Build authority; C# withholds only unproven SDK seeds, preserves literals/explicit central assignments, retains late-target refusal. Actual caller RED 39 passed/2 failed then GREEN41/0; broad493/0, full1717/0/2. Reviewers independently inspected parent-run TRX and source; neither ran tests. Codex's separate invocation again failed before process creation OS5, and he explicitly accepted source plus saved empirical traces as alternative verification. Initial INCONCLUSIVE remains historical, not rewritten. No remaining High.",
+    "completed_at": "2026-09-09T17:02:38.559740100Z",
+    "actor": {
+      "actor_id": "greg/codex",
+      "actor_kind": "agent"
+    }
+  },
+  "activity": {
+    "central": {
+      "416a545827ef2255e94115bbd58921faaeefeb9a08858ddba04792de04e4d631": {
+        "activity_id": "416a545827ef2255e94115bbd58921faaeefeb9a08858ddba04792de04e4d631",
+        "task_id": "01a08700-12f6-7d23-a1a5-85424c9d986f",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "greg/codex",
+          "actor_kind": "agent"
+        },
+        "state": "finished",
+        "state_revision": 2,
+        "event_id": "2d7fda8521e7bcac58b689e209e963de509a8552e2432dadf77c5a00b025c3a4"
+      }
+    }
+  }
+}

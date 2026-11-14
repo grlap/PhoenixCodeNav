@@ -1,0 +1,31 @@
+{
+  "id": "01a089f1-8352-7ec0-97cb-c08924253db6",
+  "external_ref": null,
+  "title": "Filter MSBuild expressions out of simple-model BareReferences",
+  "outcome": "Filter MSBuild expressions out of simple-model BareReferences",
+  "acceptance": [
+    "A bare Reference Include containing an unevaluated MSBuild expression produces no literal bare reference in the simple projection."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "task",
+  "priority": 3,
+  "labels": [
+    "fsharp",
+    "mcp-contract",
+    "msbuild",
+    "pilot",
+    "project-model",
+    "review"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "open",
+  "parent_id": "01a089a5-604d-7a91-b551-f486866243fd",
+  "child_requirement": "optional",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": null
+}

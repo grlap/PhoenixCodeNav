@@ -1,0 +1,32 @@
+{
+  "id": "01a074e7-5c8f-70b1-a0af-74ed2ff7baf6",
+  "external_ref": null,
+  "title": "Index F# callee symbol uses once per selected body",
+  "outcome": "Remove quadratic call-expression × symbol-use matching from body-local F# callees.",
+  "acceptance": [
+    "A representative many-call body regression or benchmark demonstrates non-quadratic matching behavior",
+    "Callee matching range-prunes cheaply before compiler identity comparison",
+    "Target-file symbol uses are indexed or otherwise reused instead of fully rescanned and sorted for every call expression"
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "task",
+  "priority": 2,
+  "labels": [
+    "fsharp",
+    "mcp-contract",
+    "performance",
+    "review",
+    "semantic"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "open",
+  "parent_id": "01a063dd-580b-7480-8d28-895853574bf6",
+  "child_requirement": "optional",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": null
+}

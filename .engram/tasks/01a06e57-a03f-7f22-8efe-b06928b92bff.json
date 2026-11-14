@@ -1,0 +1,28 @@
+{
+  "id": "01a06e57-a03f-7f22-8efe-b06928b92bff",
+  "external_ref": null,
+  "title": "Preserve compilation-preparation timing on degraded semantic calls",
+  "outcome": "Cancelled or degraded cold semantic calls include compilation-preparation wall time in timing.semanticColdStart.compilationMs.",
+  "acceptance": [
+    "A cancelled cold references regression proves compilationMs includes the preparation wall published by PrepareCompilationsAsync."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "bug",
+  "priority": 2,
+  "labels": [
+    "mcp-contract",
+    "review",
+    "semantic"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "superseded",
+  "parent_id": "01a063dd-5ecb-7000-814f-7cc52012253b",
+  "child_requirement": "optional",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": "01a07213-a7ec-7f51-8304-30728007a8a5",
+  "disposal_reason": "Stranded under completed parent w-7cc52012253b (semantic cold-start telemetry, shipped as 0.12.78); this p2 bug against shipped telemetry must be claimable as its own root so it can be picked next after the F# epic slice. Detached by Fable 2026-09-05 as the one concrete Engram pilot example requested by Engram::Advisor.",
+  "completion": null
+}

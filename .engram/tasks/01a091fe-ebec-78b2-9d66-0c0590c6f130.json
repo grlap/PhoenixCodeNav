@@ -1,0 +1,51 @@
+{
+  "id": "01a091fe-ebec-78b2-9d66-0c0590c6f130",
+  "external_ref": null,
+  "title": "Independent review of the daemon follow-up batch on base 1b2548a",
+  "outcome": "The three detached daemon items (w-d3a4583ea876 test, w-82c8e05b2cab docs, w-4dde133eb0ba facade) are verified from original artifacts by the independent reviewer: RED before product edits, mutants restored byte-exact, one full gate, one dual review with complete packets, freeze against the 1b2548a baseline, and done recorded only after the commit.",
+  "acceptance": [
+    "A post-review verification note on this item cites, from the original artifacts: RED/GREEN/mutant TRX timing and counts for each of the three items, the full-gate counts, both reviewer packets' lifecycle and completeness, the byte comparison of the changed paths against the 1b2548a baseline snapshot, and after publication the commit hash with an ls-remote check; or it names a concrete blocker."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "task",
+  "priority": 3,
+  "labels": [
+    "coordination",
+    "daemon",
+    "review"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "completed",
+  "parent_id": null,
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": {
+    "summary": "Independent review of the daemon follow-up batch on base 1b2548a delivered and published as e62cd7d44e3a825f970a7186707b663b5d2669e1 (main; executed by Engram::Advisor under Greg's conditional consent relayed in Advisor #310; no Git by this session). Scope: docs/design.md (two corrected passages) + new tests/CodeNav.IndexTests/SharedDaemonTests.RetirementFailures.cs; committed blobs byte-equal to my batch1d freeze (146150 / 6394) and Codex's source-freeze.json; live remote refs/heads/main = e62cd7d verified by ls-remote. Review: original reviewers Codex 6695 / Claude 6696, same delegations across all rounds, final CLEAN; packets complete (4630 / 7191 bytes) and byte-consistent with consolidation-final.json. Findings accounting: Linux criterion met from 20 raw TRX (60/60; all CPU 0, last 10 with two busy loops; macOS unexecuted); test Medium (listener ordering) fixed and verified; two untrue docs statements introduced in the packet (former 1605, 1607) fixed and verified through Program/DaemonServer/StartupReport with CliReportsWriterRefusalAsJsonAndExitThree as corroboration; one pre-existing Low left open on w-7ab6b15094c6. Gates on final bytes verified from originals: build 0/0, 2222/0/2, MCP 48/0 (a4693f69, gitlinks == heads), website 167. Engram closures verified: w-f6c484b2dccd → w-d3a4583ea876 → w-82c8e05b2cab completed with the hash, criteria unchanged.",
+    "completed_at": "2026-09-11T22:51:37.309841200Z",
+    "actor": {
+      "actor_id": "greg/claude",
+      "actor_kind": "agent"
+    }
+  },
+  "activity": {
+    "central": {
+      "cb2a3e11028f6e1ef5efa263a03986f8c8c551996ad98e4f43b9e82e49b8b809": {
+        "activity_id": "cb2a3e11028f6e1ef5efa263a03986f8c8c551996ad98e4f43b9e82e49b8b809",
+        "task_id": "01a091fe-ebec-78b2-9d66-0c0590c6f130",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "greg/claude",
+          "actor_kind": "agent"
+        },
+        "state": "finished",
+        "state_revision": 2,
+        "event_id": "446f0e01fca4c066ca6e5797cd3908feaea959ede86c26beb2b53d5f5c009bac"
+      }
+    }
+  }
+}

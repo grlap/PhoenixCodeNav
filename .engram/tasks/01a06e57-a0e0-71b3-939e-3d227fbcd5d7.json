@@ -1,0 +1,50 @@
+{
+  "id": "01a06e57-a0e0-71b3-939e-3d227fbcd5d7",
+  "external_ref": null,
+  "title": "Assert warm semantic calls report cold false",
+  "outcome": "The cold-start telemetry contract decisively distinguishes a cold first call from a warm repeated call.",
+  "acceptance": [
+    "Batch51TelemetryTests asserts timing.semanticColdStart.cold is false on the warm References response."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "task",
+  "priority": 2,
+  "labels": [
+    "review",
+    "testing"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "completed",
+  "parent_id": "01a063dd-5ecb-7000-814f-7cc52012253b",
+  "child_requirement": "optional",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": {
+    "summary": "Pinned warm semantic calls to cold:false.",
+    "completed_at": "2026-09-05T00:03:14.243944200Z",
+    "actor": {
+      "actor_id": "greg/codex",
+      "actor_kind": "agent"
+    }
+  },
+  "activity": {
+    "central": {
+      "554d414a58d33a210529b97cece800172424e8b0d0818acd1c4a513319a236e4": {
+        "activity_id": "554d414a58d33a210529b97cece800172424e8b0d0818acd1c4a513319a236e4",
+        "task_id": "01a06e57-a0e0-71b3-939e-3d227fbcd5d7",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "greg/codex",
+          "actor_kind": "agent"
+        },
+        "state": "finished",
+        "state_revision": 2,
+        "event_id": "1794bec80b22376d44220963bf939d5316fce29e892a1f38b057fc3692125592"
+      }
+    }
+  }
+}

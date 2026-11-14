@@ -1,0 +1,66 @@
+{
+  "id": "01a089d2-627b-73a1-9eff-55dc8db132b5",
+  "external_ref": null,
+  "title": "Only report captured reference snapshots in the simple F# model",
+  "outcome": "Simple F# results do not claim snapshots for omitted inputs or restored package authority for heuristic assets; evaluated mode remains unchanged.",
+  "acceptance": [
+    "SimpleProjectModelDisclosesPackageHeuristicsWithoutBlockingLocalNavigation passes with both snapshot reasons absent for missing inputs; legacy ordered-source public control still reports the binary snapshot for its captured FSharp.Core DLL."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "bug",
+  "priority": 2,
+  "labels": [
+    "fsharp",
+    "msbuild",
+    "pilot",
+    "project-model",
+    "semantic",
+    "testing"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "completed",
+  "parent_id": "01a089a5-604d-7a91-b551-f486866243fd",
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": {
+    "summary": "Missing Simple inputs have neither snapshot reason; legacy captured HintPath control preserves binary provenance; successful package-only public identity test has package provenance without binary/HintPath provenance. Documentation distinguishes Simple copies from unchanged Evaluated declared-reference trigger; version comment and spacing corrected.",
+    "completed_at": "2026-09-10T20:49:38.676308600Z",
+    "actor": {
+      "actor_id": "greg/codex",
+      "actor_kind": "agent"
+    }
+  },
+  "activity": {
+    "central": {
+      "58fe1146148269bd251678c90a60691be1ab04fad67281a2d5ed961182e42ecc": {
+        "activity_id": "58fe1146148269bd251678c90a60691be1ab04fad67281a2d5ed961182e42ecc",
+        "task_id": "01a089d2-627b-73a1-9eff-55dc8db132b5",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "greg/codex",
+          "actor_kind": "agent"
+        },
+        "state": "started",
+        "state_revision": 1,
+        "event_id": "58fe1146148269bd251678c90a60691be1ab04fad67281a2d5ed961182e42ecc"
+      },
+      "caa62a9235e88425e94c6f2fe6ca5ff256b11e7b315a293bc9f989d45ecdf432": {
+        "activity_id": "caa62a9235e88425e94c6f2fe6ca5ff256b11e7b315a293bc9f989d45ecdf432",
+        "task_id": "01a089d2-627b-73a1-9eff-55dc8db132b5",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "greg/codex",
+          "actor_kind": "agent"
+        },
+        "state": "finished",
+        "state_revision": 2,
+        "event_id": "7b2a83fbed0ca293c05664f077f5e159c3eb115d7fb4eae845d3b87bba793ffe"
+      }
+    }
+  }
+}

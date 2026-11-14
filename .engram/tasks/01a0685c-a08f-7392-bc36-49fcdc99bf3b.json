@@ -1,0 +1,47 @@
+{
+  "id": "01a0685c-a08f-7392-bc36-49fcdc99bf3b",
+  "external_ref": null,
+  "title": "Generalize same-name semantic owner collision disclosure",
+  "outcome": "Every semantic result honestly discloses loaded same-name physical owner collisions while preserving the approved assembly-name-keyed compilation model.",
+  "acceptance": [
+    "Every semantic result whose loaded owner set contains non-paired same-name rows carries one stable collision note with the colliding physical paths.",
+    "The CLI changeset is already shipped separately before this work begins.",
+    "The disclosure has its own features entry, product regression coverage, and the required BuildInfo version bump.",
+    "docs/design.md records the two-layer physical-row versus assembly-name compilation identity model and Greg's approved rationale."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "task",
+  "priority": 2,
+  "labels": [
+    "agent-experience",
+    "architecture",
+    "semantic"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "open",
+  "parent_id": null,
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": null,
+  "activity": {
+    "central": {
+      "04f949a1137f4cfd487968d007e70a00b8ce98a98ed64adf5dcd65f08ed4d1b0": {
+        "activity_id": "04f949a1137f4cfd487968d007e70a00b8ce98a98ed64adf5dcd65f08ed4d1b0",
+        "task_id": "01a0685c-a08f-7392-bc36-49fcdc99bf3b",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "termal",
+          "actor_kind": "agent"
+        },
+        "state": "released",
+        "state_revision": 2,
+        "event_id": "1504077400a3a3067b0f7ff600ac74f19ea216b4df534b42b6bb821e888e532e"
+      }
+    }
+  }
+}

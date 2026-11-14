@@ -1,0 +1,54 @@
+{
+  "id": "01a08c62-5b0e-7661-9b95-5986a68e5401",
+  "external_ref": null,
+  "title": "Restore the ReadMetadata doc comment displaced by EvaluatedFSharpInputsReady",
+  "outcome": "Restore the ReadMetadata doc comment displaced by EvaluatedFSharpInputsReady",
+  "acceptance": [
+    "ReadMetadata again owns its persisted-identity/pinned-snapshot XML summary, and EvaluatedFSharpInputsReady has separate accurate readiness documentation."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "task",
+  "priority": 3,
+  "labels": [
+    "architecture",
+    "default",
+    "fsharp",
+    "project-model",
+    "review",
+    "semantic"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "completed",
+  "parent_id": null,
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": {
+    "summary": "ReadMetadata owns its correct XML summary; readiness accessor has a separate pinned-epoch summary.",
+    "completed_at": "2026-09-10T20:49:38.579684300Z",
+    "actor": {
+      "actor_id": "greg/codex",
+      "actor_kind": "agent"
+    }
+  },
+  "activity": {
+    "central": {
+      "871fbe6b82b9ec8086f0d68952d377763b40fd5c1efa74cebc0f13fe99a1123b": {
+        "activity_id": "871fbe6b82b9ec8086f0d68952d377763b40fd5c1efa74cebc0f13fe99a1123b",
+        "task_id": "01a08c62-5b0e-7661-9b95-5986a68e5401",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "greg/codex",
+          "actor_kind": "agent"
+        },
+        "state": "finished",
+        "state_revision": 2,
+        "event_id": "e3d9409bd4bbee6588d4322f05875bd4047b77002310e0ac6032e9de5b2b8500"
+      }
+    }
+  }
+}

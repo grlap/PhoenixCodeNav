@@ -1,0 +1,29 @@
+{
+  "id": "01a07795-f435-70a1-acee-83b3944aae10",
+  "external_ref": null,
+  "title": "Split SemanticService.cs by concern",
+  "outcome": "Split SemanticService.cs by concern",
+  "acceptance": [
+    "SemanticService.cs is split into concern-focused partial files without behavior, lifecycle, or initializer-order changes; full gates and dual review pass"
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "task",
+  "priority": 2,
+  "labels": [
+    "agent-experience",
+    "architecture",
+    "maintainability",
+    "structure"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "open",
+  "parent_id": "01a0748d-2331-79e0-a8a4-c57d709cd778",
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": null
+}

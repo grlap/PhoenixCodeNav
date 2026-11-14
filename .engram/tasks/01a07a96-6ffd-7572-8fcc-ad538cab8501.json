@@ -1,0 +1,30 @@
+{
+  "id": "01a07a96-6ffd-7572-8fcc-ad538cab8501",
+  "external_ref": null,
+  "title": "Assert GitWatcher handle release with a decisive Git-repository deletion proof",
+  "outcome": "A Git-backed shutdown regression proves GitWatcher releases its handles rather than relying only on tolerant repository cleanup.",
+  "acceptance": [
+    "A Git-repository variant of the shutdown lifecycle test fails if GitWatcher retains handles on .git or .git/logs",
+    "The asserted proof does not replace tolerant cleanup for unrelated Git-tree residue"
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "task",
+  "priority": 3,
+  "labels": [
+    "index-freshness",
+    "infrastructure",
+    "review",
+    "testing"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "cancelled",
+  "parent_id": "01a078ae-bdca-7b30-a846-3887ea1da0de",
+  "child_requirement": "optional",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": "Refiled as an independent root per Fable clearance; this pre-existing non-regression coverage gap must not be coupled to the active TEMP-lifecycle parent.",
+  "completion": null
+}

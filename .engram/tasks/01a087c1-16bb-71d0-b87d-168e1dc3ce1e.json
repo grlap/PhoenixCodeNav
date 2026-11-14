@@ -1,0 +1,56 @@
+{
+  "id": "01a087c1-16bb-71d0-b87d-168e1dc3ce1e",
+  "external_ref": null,
+  "title": "Do not start semantic item ordering for immutable-false project conditions",
+  "outcome": "A shared .props C#-only Compile group guarded by the reserved root project extension must not poison later F# property evaluation; preserve ordering refusal for conditions that can actually change.",
+  "acceptance": [
+    "Cover both group-level and item-level conditions, immutable versus mutable false conditions, nested boolean forms, and actual C# behavior without introducing language-specific property rules.",
+    "Preserve fail-closed ordering for live or potentially retargeted semantic items, cold/delta persisted Exists correctness, unchanged limits; version/capability/schema discipline and full gates plus dual review.",
+    "Reproduce the screenshot with an early imported ItemGroup conditioned on MSBuildProjectExtension == .csproj And IsNet8OrGreater == true, then later F# properties; RED before fix and GREEN after with no C# compile input included."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "bug",
+  "priority": 1,
+  "labels": [
+    "csharp",
+    "fsharp",
+    "msbuild",
+    "semantic-correctness"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "completed",
+  "parent_id": null,
+  "child_requirement": "required",
+  "prerequisites": [
+    "01a087e8-d939-75d2-a325-0edf24339143"
+  ],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": {
+    "summary": "Fixed F# invariant-false imported item ordering and aligned shared condition evaluation with scalar-preserving raw grammar; version 0.12.101/schema 39. Screenshot regressions RED then GREEN; full final gate 1818/0/2, fresh MCP47/0,website167/167,Release0warnings/errors; both original reviewers CLEAN with original High independently verified. One Low coverage/docs follow-up is separately open as w-e6b0a8595a89. Implementation uncommitted; no push authority.",
+    "completed_at": "2026-09-09T21:17:11.983123900Z",
+    "actor": {
+      "actor_id": "greg/codex",
+      "actor_kind": "agent"
+    }
+  },
+  "activity": {
+    "central": {
+      "6faf786d6b7bd636797af1c70d74611d2da6efa61574b4cb8caeb5c1c02713e3": {
+        "activity_id": "6faf786d6b7bd636797af1c70d74611d2da6efa61574b4cb8caeb5c1c02713e3",
+        "task_id": "01a087c1-16bb-71d0-b87d-168e1dc3ce1e",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "greg/codex",
+          "actor_kind": "agent"
+        },
+        "state": "finished",
+        "state_revision": 2,
+        "event_id": "dbdb61776580ebc6d7064f42ddfea14fc7d111d47b98f0670104c9ba5baaf5c6"
+      }
+    }
+  }
+}

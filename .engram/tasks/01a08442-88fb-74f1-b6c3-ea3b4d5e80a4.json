@@ -1,0 +1,54 @@
+{
+  "id": "01a08442-88fb-74f1-b6c3-ea3b4d5e80a4",
+  "external_ref": null,
+  "title": "Retain capability growth margin for compound self-default feature",
+  "outcome": "Retain capability growth margin for compound self-default feature",
+  "acceptance": [
+    "CapabilitiesDynamicTextUsesExactUtf8BoundaryAndReportsTruncation passes with unchanged response budget and minimum 2048-byte growth-margin assertion."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "bug",
+  "priority": 2,
+  "labels": [
+    "architecture",
+    "csharp",
+    "fsharp",
+    "msbuild",
+    "semantic",
+    "semantic-correctness"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "completed",
+  "parent_id": "01a0843d-0097-77f3-af41-c7383c62647a",
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": {
+    "summary": "Fixed capability growth regression with meaning-preserving summary compaction and clause assertions. Full gate passes unchanged 2048-byte margin and all numeric limits. Both reviewers completed CLEAN without Critical or High; source remains uncommitted.",
+    "completed_at": "2026-09-09T04:27:08.572040600Z",
+    "actor": {
+      "actor_id": "greg/codex",
+      "actor_kind": "agent"
+    }
+  },
+  "activity": {
+    "central": {
+      "ee79c19a9492b544f1cf040b7a49d320db72256da035a7c17474d0a93e9c971a": {
+        "activity_id": "ee79c19a9492b544f1cf040b7a49d320db72256da035a7c17474d0a93e9c971a",
+        "task_id": "01a08442-88fb-74f1-b6c3-ea3b4d5e80a4",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "greg/codex",
+          "actor_kind": "agent"
+        },
+        "state": "finished",
+        "state_revision": 2,
+        "event_id": "5fbad9e08d6998ada7d295bd002b8921089a28d5a730599d3707349f76fee53c"
+      }
+    }
+  }
+}

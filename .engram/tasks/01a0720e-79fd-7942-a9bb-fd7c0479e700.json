@@ -1,0 +1,54 @@
+{
+  "id": "01a0720e-79fd-7942-a9bb-fd7c0479e700",
+  "external_ref": null,
+  "title": "Preserve SDK NETSTANDARD compatibility defines in F# semantic contexts",
+  "outcome": "F# semantic evaluation uses the SDK-compatible NETSTANDARD symbol set, so conditional compilation resolves the active declaration without false exactness.",
+  "acceptance": [
+    "A public definition regression for a net8.0 root referencing netstandard2.0 resolves the NETSTANDARD2_0_OR_GREATER branch with exact confidence.",
+    "Cumulative NETSTANDARD compatibility symbols are covered for netstandard2.0 and netstandard2.1."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "bug",
+  "priority": 1,
+  "labels": [
+    "fsharp",
+    "mcp-contract",
+    "review",
+    "semantic",
+    "semantic-correctness"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "completed",
+  "parent_id": "01a070c5-95e1-7482-8cd1-326c967e5cb4",
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": {
+    "summary": "Restored SDK-compatible cumulative NETSTANDARD defines and pinned active-branch exact navigation.",
+    "completed_at": "2026-09-05T14:56:05.269691300Z",
+    "actor": {
+      "actor_id": "greg/codex",
+      "actor_kind": "agent"
+    }
+  },
+  "activity": {
+    "central": {
+      "908ca209d89bb8e9a5f137d328de7339d02d7cd59def37b8ee89b60dabbe4710": {
+        "activity_id": "908ca209d89bb8e9a5f137d328de7339d02d7cd59def37b8ee89b60dabbe4710",
+        "task_id": "01a0720e-79fd-7942-a9bb-fd7c0479e700",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "greg/codex",
+          "actor_kind": "agent"
+        },
+        "state": "finished",
+        "state_revision": 2,
+        "event_id": "4f693b092ad9c6e299e349f0e3937095125227e9398d5b77c36f62a2ad9f6e5d"
+      }
+    }
+  }
+}

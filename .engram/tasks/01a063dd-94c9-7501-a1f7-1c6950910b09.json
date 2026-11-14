@@ -1,0 +1,47 @@
+{
+  "id": "01a063dd-94c9-7501-a1f7-1c6950910b09",
+  "external_ref": null,
+  "title": "Extend transient retry guidance across semantic tools",
+  "outcome": "Agents receive the same bounded retry signal for the same transient semantic causes regardless of which semantic navigation tool they called.",
+  "acceptance": [
+    "Permanent and unsupported failures do not recommend a retry, and no tool introduces an unbounded retry loop.",
+    "Product tests cover both a recommended transient retry and a non-retryable failure for each shared response path.",
+    "The capability is represented by its own features[] identifier and BuildInfo.Version is bumped.",
+    "definition, references, callers, callees, type_hierarchy, and implementations emit consistent retryRecommended and retryHint fields for cluster_cold_load and semantic_timeout."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "feature",
+  "priority": 2,
+  "labels": [
+    "agent-experience",
+    "mcp-contract",
+    "semantic"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "open",
+  "parent_id": null,
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": null,
+  "activity": {
+    "central": {
+      "ef7d0d645d072848197092ee5e71a2436d6054d8549f429b62b61e526a5bcedf": {
+        "activity_id": "ef7d0d645d072848197092ee5e71a2436d6054d8549f429b62b61e526a5bcedf",
+        "task_id": "01a063dd-94c9-7501-a1f7-1c6950910b09",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "fable",
+          "actor_kind": "agent"
+        },
+        "state": "released",
+        "state_revision": 2,
+        "event_id": "c245a84c98aaafef8f61382580c1ddfb39ef94a7b92187c5584631db66758792"
+      }
+    }
+  }
+}

@@ -1,0 +1,27 @@
+{
+  "id": "01a0739f-5b23-7f11-a4fe-b6e3591bb0da",
+  "external_ref": null,
+  "title": "Make the F# references deadline-salvage regression deterministic",
+  "outcome": "The deadline regression triggers cancellation at the dependent boundary without relying on root FCS completing within a wall-clock race.",
+  "acceptance": [
+    "ReferencesDeadlineKeepsCompletedRootEvidenceAndReportsPendingDependents uses a deterministic seam and remains stable under loaded CI."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "task",
+  "priority": 3,
+  "labels": [
+    "review",
+    "testing"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "open",
+  "parent_id": null,
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": null
+}

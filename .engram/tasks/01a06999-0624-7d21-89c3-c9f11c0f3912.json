@@ -1,0 +1,59 @@
+{
+  "id": "01a06999-0624-7d21-89c3-c9f11c0f3912",
+  "external_ref": null,
+  "title": "Option C: harmonize documentation on name-keyed semantic compilation (two-layer explanation in design.md plus disclosure wherever symbols resolve by name)",
+  "outcome": "Owner decision 2026-09-03 (Greg): Option C. Rationale verbatim: 'we identify using a name, because I've seen project using references with hints instead of project reference.' Options A (rename to project-keyed) and B were rejected.",
+  "acceptance": [
+    "docs/design.md explains the two layers (project identity vs. name-keyed semantic compilation) without contradiction, states why name-keying is deliberate (HintPath binary references express only assembly identity), and every tool description or note that resolves symbols by name discloses it; no product behavior change"
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "task",
+  "priority": 2,
+  "labels": [],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "completed",
+  "parent_id": null,
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": {
+    "summary": "Documented Phoenix's physical-project index layer versus assembly-name-keyed C# semantic/reference-graph layer, harmonized seven tool descriptions and response notes, bumped BuildInfo to 0.12.74, added decisive contract tests, corrected collision-disclosure scope, passed every gate, and committed as 21cdaa8.",
+    "completed_at": "2026-09-04T01:20:03.922826900Z",
+    "actor": {
+      "actor_id": "termal",
+      "actor_kind": "agent"
+    }
+  },
+  "activity": {
+    "central": {
+      "3826e9949b10624eff0b3b51ded388261f291aedcce5c1586ef33672bb461d09": {
+        "activity_id": "3826e9949b10624eff0b3b51ded388261f291aedcce5c1586ef33672bb461d09",
+        "task_id": "01a06999-0624-7d21-89c3-c9f11c0f3912",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "termal",
+          "actor_kind": "agent"
+        },
+        "state": "finished",
+        "state_revision": 2,
+        "event_id": "e6211f4f1579de3042a7b598220fd1d77cbac7fb8904e6d3899b537252934f14"
+      },
+      "a8f54742eed6c8e1ec4d894697a50fd837e6c3fa4e0e28342d1fc0dbe2c0f786": {
+        "activity_id": "a8f54742eed6c8e1ec4d894697a50fd837e6c3fa4e0e28342d1fc0dbe2c0f786",
+        "task_id": "01a06999-0624-7d21-89c3-c9f11c0f3912",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "termal",
+          "actor_kind": "agent"
+        },
+        "state": "released",
+        "state_revision": 2,
+        "event_id": "22e728961b6e6db2645d7ddf0beea893c112e8118508d830de1981d3954fc937"
+      }
+    }
+  }
+}

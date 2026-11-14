@@ -1,0 +1,33 @@
+{
+  "id": "01a083d0-6f05-7102-ab35-2afb5263d438",
+  "external_ref": null,
+  "title": "Collapse the per-owner probe-project query into one statement",
+  "outcome": "Collapse the per-owner probe-project query into one statement",
+  "acceptance": [
+    "Targeted owner lookup avoids preparing one join per project and preserves all refresh behavior without introducing limits."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "task",
+  "priority": 3,
+  "labels": [
+    "architecture",
+    "csharp",
+    "fsharp",
+    "msbuild",
+    "performance",
+    "review",
+    "semantic",
+    "semantic-correctness"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "open",
+  "parent_id": "01a08395-4315-7a03-8dfa-9c66434a9eb6",
+  "child_requirement": "optional",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": null
+}

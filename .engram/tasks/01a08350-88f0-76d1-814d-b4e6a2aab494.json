@@ -1,0 +1,57 @@
+{
+  "id": "01a08350-88f0-76d1-814d-b4e6a2aab494",
+  "external_ref": null,
+  "title": "Preserve MSBuild escaping semantics in bounded StartsWith evaluation",
+  "outcome": "StartsWith evaluates escaped receiver and literal scalar text with MSBuild-compatible single-unescape behavior, or fails closed where compatibility cannot be established.",
+  "acceptance": [
+    "Escaped literal %6eet and escaped receiver cases match native MSBuild.",
+    "Focused regressions pin both operand positions.",
+    "No evaluator limit changes."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "bug",
+  "priority": 1,
+  "labels": [
+    "architecture",
+    "csharp",
+    "fsharp",
+    "msbuild",
+    "review",
+    "semantic",
+    "semantic-correctness"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "completed",
+  "parent_id": "01a08337-0a68-7cf1-bd32-0478506fde2c",
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": {
+    "summary": "StartsWith performs strict one-pass MSBuild %HH unescape on both scalars; valid, double-escaped, and malformed whitespace cases match MSBuild and are regression-tested.",
+    "completed_at": "2026-09-08T23:48:41.702514200Z",
+    "actor": {
+      "actor_id": "greg/codex",
+      "actor_kind": "agent"
+    }
+  },
+  "activity": {
+    "central": {
+      "efc96f0f279a0562cae81495fccf52bfb713442544a74baed7018afe23f2f1d5": {
+        "activity_id": "efc96f0f279a0562cae81495fccf52bfb713442544a74baed7018afe23f2f1d5",
+        "task_id": "01a08350-88f0-76d1-814d-b4e6a2aab494",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "greg/codex",
+          "actor_kind": "agent"
+        },
+        "state": "finished",
+        "state_revision": 2,
+        "event_id": "d7e2635e4aca1b8f0604392c322ba320e7667b03f561f3133d28086df4ee241a"
+      }
+    }
+  }
+}

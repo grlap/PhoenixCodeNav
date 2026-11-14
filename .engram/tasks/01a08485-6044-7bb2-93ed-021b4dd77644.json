@@ -1,0 +1,30 @@
+{
+  "id": "01a08485-6044-7bb2-93ed-021b4dd77644",
+  "external_ref": null,
+  "title": "Allow agents to select semantic Configuration and Platform",
+  "outcome": "Allow agents to select semantic Configuration and Platform",
+  "acceptance": [
+    "An agent can explicitly select Configuration and Platform for semantic analysis, including Release, x86, x64 and custom project-defined values; omission uses the documented Debug and AnyCPU defaults.",
+    "Regression tests distinguish Debug versus Release and AnyCPU versus x86/x64, preserve the existing target-framework selection, and cover explicit custom values.",
+    "Responses expose the effective context; evaluator inputs, captured dependencies and semantic cache identities remain consistent with that context, without cross-context leakage."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "feature",
+  "priority": 2,
+  "labels": [
+    "agent-experience",
+    "mcp-contract",
+    "semantic"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "open",
+  "parent_id": null,
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": null
+}

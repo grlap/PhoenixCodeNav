@@ -1,0 +1,47 @@
+{
+  "id": "01a063dd-8f5b-7d81-8967-c9c6bcc81b0d",
+  "external_ref": null,
+  "title": "Add an explicit overridable default query scope",
+  "outcome": "Agents receive lower-noise default results while retaining complete indexed evidence through an explicit all-content query.",
+  "acceptance": [
+    "A host or repository can configure a documented default query scope without changing what Phoenix indexes.",
+    "An explicit all-content scope overrides the default and covers generated, vendored, and external indexed content.",
+    "Every coverage-bearing response echoes whether a default scope was applied and names it.",
+    "No index-time ignore rule is introduced, no existing limit is lowered, and the capability has its own features[] identifier plus a BuildInfo.Version bump."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "feature",
+  "priority": 3,
+  "labels": [
+    "agent-experience",
+    "mcp-contract",
+    "search"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "open",
+  "parent_id": null,
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": null,
+  "activity": {
+    "central": {
+      "e29f7fdf99a2f6310c5942f776cee76f00e91405f411d301f1ce48c721e8fbee": {
+        "activity_id": "e29f7fdf99a2f6310c5942f776cee76f00e91405f411d301f1ce48c721e8fbee",
+        "task_id": "01a063dd-8f5b-7d81-8967-c9c6bcc81b0d",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "fable",
+          "actor_kind": "agent"
+        },
+        "state": "released",
+        "state_revision": 2,
+        "event_id": "8208a571916d67e640a63fcb887586a14d225a20013abe89f913dee7d2edf8e1"
+      }
+    }
+  }
+}

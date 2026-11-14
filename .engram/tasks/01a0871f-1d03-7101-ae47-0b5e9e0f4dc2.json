@@ -1,0 +1,29 @@
+{
+  "id": "01a0871f-1d03-7101-ae47-0b5e9e0f4dc2",
+  "external_ref": null,
+  "title": "Disclose C# Directory.Build seed-withholding in shared SDK capability",
+  "outcome": "Deploy verification can discover why C# SDK-dependent CPM versions remain unresolved under indexed Directory.Build authority.",
+  "acceptance": [
+    "shared-semantic-sdk-context explicitly names C# seed withholding under indexed Directory.Build authority, with a decisive Batch4 summary assertion and unchanged capability byte budgets/growth-margin checks passing."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "task",
+  "priority": 3,
+  "labels": [
+    "csharp",
+    "fsharp",
+    "mcp-contract",
+    "review"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "open",
+  "parent_id": null,
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": null
+}

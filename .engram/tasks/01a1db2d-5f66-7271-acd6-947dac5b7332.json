@@ -1,0 +1,45 @@
+{
+  "id": "01a1db2d-5f66-7271-acd6-947dac5b7332",
+  "external_ref": null,
+  "title": "Exchange Phoenix task planning with DL560 through the authorized engram-data branch",
+  "outcome": "Publish a privacy-reviewed Phoenix planning snapshot on the single authorized public data branch and safely transfer it plus an attributed one-time memory copy to DL560 without overwriting independent work.",
+  "acceptance": [
+    "Obtain read-only DL560 item/memory/task-sync census first; if independent work exists, stop before import/publication and record a non-destructive merge plan requirement.",
+    "If target basis permits exchange, validate and privacy-review the exact export before publishing only the dedicated engram-data branch, with explicit data-only commit/push and counts recorded.",
+    "Complete only a safe dry-run-approved import and exact one-time memory transfer on DL560; report actual counts, provenance and sync limitations."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "task",
+  "priority": 1,
+  "labels": [
+    "coordination",
+    "task-sync"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "open",
+  "parent_id": null,
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": null,
+  "activity": {
+    "central": {
+      "39eea879d27b4729a5e4417d9e41cc6e": {
+        "activity_id": "39eea879d27b4729a5e4417d9e41cc6e",
+        "task_id": "01a1db2d-5f66-7271-acd6-947dac5b7332",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "greg/codex",
+          "actor_kind": "agent"
+        },
+        "state": "started",
+        "state_revision": 1,
+        "event_id": "39eea879d27b4729a5e4417d9e41cc6e"
+      }
+    }
+  }
+}

@@ -1,0 +1,53 @@
+{
+  "id": "01a07c73-0517-73d1-8db6-bdd90625ad48",
+  "external_ref": null,
+  "title": "Bound the SharedDaemon handshake-EOF connection wait",
+  "outcome": "Bound the SharedDaemon handshake-EOF connection wait",
+  "acceptance": [
+    "CodeNav.IndexTests.SharedDaemonTests.HandshakeEofTransparentlyReelectsAfterPublishedDaemonDies completes or fails with a bounded diagnostic when the first listener receives no connection",
+    "The complete gate no longer hangs in CodeNav.IndexTests"
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "bug",
+  "priority": 1,
+  "labels": [
+    "daemon",
+    "infrastructure",
+    "review",
+    "testing"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "completed",
+  "parent_id": "01a078ae-bdca-7b30-a846-3887ea1da0de",
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": {
+    "summary": "Committed the bounded SharedDaemon handshake-EOF and adjacent deadline-listener teardown fix as 69fb99e848122fd059a63ec123873a4472dc001b.",
+    "completed_at": "2026-09-07T17:09:48.567458100Z",
+    "actor": {
+      "actor_id": "greg/codex",
+      "actor_kind": "agent"
+    }
+  },
+  "activity": {
+    "central": {
+      "63e0f330058b57d6c4121de35cfc86da319a080ab7cae0f79d8ec9e6f0f00ae5": {
+        "activity_id": "63e0f330058b57d6c4121de35cfc86da319a080ab7cae0f79d8ec9e6f0f00ae5",
+        "task_id": "01a07c73-0517-73d1-8db6-bdd90625ad48",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "greg/codex",
+          "actor_kind": "agent"
+        },
+        "state": "finished",
+        "state_revision": 2,
+        "event_id": "62b835dc14a14073c286776ef357e6067381e70b40173ba7667481f9c380c75b"
+      }
+    }
+  }
+}

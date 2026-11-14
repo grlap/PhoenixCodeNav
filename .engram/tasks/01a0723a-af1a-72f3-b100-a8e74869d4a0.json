@@ -1,0 +1,27 @@
+{
+  "id": "01a0723a-af1a-72f3-b100-a8e74869d4a0",
+  "external_ref": null,
+  "title": "Document that platform-qualified F# roots fail closed at framework references",
+  "outcome": "Document that platform-qualified F# roots fail closed at framework references",
+  "acceptance": [
+    "Document that platform-qualified F# roots fail closed at framework references is done"
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "task",
+  "priority": 3,
+  "labels": [
+    "documentation",
+    "mcp-contract"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "superseded",
+  "parent_id": "01a063dd-5401-7f73-a63d-bea317b25710",
+  "child_requirement": "optional",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": "01a07223-6314-77d2-ad6d-2bc9ec456f43",
+  "disposal_reason": "Duplicate: the same platform-qualified F# TFM fail-closed disclosure was filed minutes earlier by the 0.12.84 reviewer as w-2bc9ec456f43 (fenced under completed w-326c967e5cb4; detach when picked). Fable created w-a8e74869d4a0 without seeing it; superseding to keep one item.",
+  "completion": null
+}

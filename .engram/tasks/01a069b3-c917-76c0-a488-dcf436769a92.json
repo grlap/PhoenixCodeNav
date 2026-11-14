@@ -1,0 +1,50 @@
+{
+  "id": "01a069b3-c917-76c0-a488-dcf436769a92",
+  "external_ref": null,
+  "title": "Cover CLI args-file symlink refusal with an in-workspace target",
+  "outcome": "The symlink integration case proves rejection is caused by link identity rather than by a target outside the workspace.",
+  "acceptance": [
+    "A Unix final-component symlink to a regular JSON file inside the workspace returns exit 2 with argument_source_not_regular."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "task",
+  "priority": 3,
+  "labels": [
+    "review",
+    "testing"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "completed",
+  "parent_id": null,
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": {
+    "summary": "The CLI args-file symlink regression now points to a valid regular JSON file inside the workspace, isolating link rejection from workspace escape.",
+    "completed_at": "2026-09-04T00:22:13.251324Z",
+    "actor": {
+      "actor_id": "termal",
+      "actor_kind": "agent"
+    }
+  },
+  "activity": {
+    "central": {
+      "e50ddac35ca2975ac29b6b8fca5dca67f15625f4fef9b2c45062f66776229959": {
+        "activity_id": "e50ddac35ca2975ac29b6b8fca5dca67f15625f4fef9b2c45062f66776229959",
+        "task_id": "01a069b3-c917-76c0-a488-dcf436769a92",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "termal",
+          "actor_kind": "agent"
+        },
+        "state": "finished",
+        "state_revision": 2,
+        "event_id": "59df5cf3d1563d2068bda22d7fbeed46f2d02211eb584e7f1168f3316208b7d5"
+      }
+    }
+  }
+}

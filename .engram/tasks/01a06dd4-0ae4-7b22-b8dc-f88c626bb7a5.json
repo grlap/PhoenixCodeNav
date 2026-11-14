@@ -1,0 +1,53 @@
+{
+  "id": "01a06dd4-0ae4-7b22-b8dc-f88c626bb7a5",
+  "external_ref": null,
+  "title": "Refine hero copy into an explicit spherical wrap",
+  "outcome": "The desktop headline and supporting copy trace the black hole silhouette line by line as shown in the approved reference.",
+  "acceptance": [
+    "Compact and mobile layouts retain natural readable text flow",
+    "Desktop headline uses a pronounced three-line mirrored contour around the sphere",
+    "Desktop supporting copy uses an explicit multi-line arc that bows away at the sphere midpoint and returns below it",
+    "Website verification passes"
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "task",
+  "priority": 1,
+  "labels": [
+    "design",
+    "website"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "completed",
+  "parent_id": null,
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": {
+    "summary": "Matched the reference with an explicit wide-screen spherical text contour on both sides of the centered black hole, while preserving natural compact/mobile flow.",
+    "completed_at": "2026-09-04T19:11:50.859823500Z",
+    "actor": {
+      "actor_id": "greg/codex",
+      "actor_kind": "agent"
+    }
+  },
+  "activity": {
+    "central": {
+      "a7048170e5925669c0138389a6648774038261fcba0b0553c2a1b332794be0ad": {
+        "activity_id": "a7048170e5925669c0138389a6648774038261fcba0b0553c2a1b332794be0ad",
+        "task_id": "01a06dd4-0ae4-7b22-b8dc-f88c626bb7a5",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "greg/codex",
+          "actor_kind": "agent"
+        },
+        "state": "finished",
+        "state_revision": 2,
+        "event_id": "94e530354428da2d637a295a7e1a92b994c73e10b00a971c488932b73b3cb1b0"
+      }
+    }
+  }
+}

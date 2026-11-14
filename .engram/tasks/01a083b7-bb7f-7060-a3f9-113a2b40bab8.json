@@ -1,0 +1,56 @@
+{
+  "id": "01a083b7-bb7f-7060-a3f9-113a2b40bab8",
+  "external_ref": null,
+  "title": "Document the v32 persisted Exists schema boundary in code",
+  "outcome": "Document the v32 persisted Exists schema boundary in code",
+  "acceptance": [
+    "SchemaVersion XML documentation explains the v32 rebuild."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "task",
+  "priority": 3,
+  "labels": [
+    "architecture",
+    "csharp",
+    "fsharp",
+    "indexing",
+    "msbuild",
+    "review",
+    "semantic",
+    "semantic-correctness"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "completed",
+  "parent_id": "01a08395-4315-7a03-8dfa-9c66434a9eb6",
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": {
+    "summary": "Schema32 history comment documents persisted Exists facts and rebuild boundary; same reviewers verified. Committed 9cd8aa9. Final same-session dual review CLEAN; full solution1587/0, Release0warnings/errors, MCP47/0, website167/167. No numeric limit changes.",
+    "completed_at": "2026-09-09T01:39:05.236754900Z",
+    "actor": {
+      "actor_id": "greg/codex",
+      "actor_kind": "agent"
+    }
+  },
+  "activity": {
+    "central": {
+      "46d4050f936d9fc5e37908b0f220e351e2adf910f5b7d0d0a0ab2c2f0fe57209": {
+        "activity_id": "46d4050f936d9fc5e37908b0f220e351e2adf910f5b7d0d0a0ab2c2f0fe57209",
+        "task_id": "01a083b7-bb7f-7060-a3f9-113a2b40bab8",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "greg/codex",
+          "actor_kind": "agent"
+        },
+        "state": "finished",
+        "state_revision": 2,
+        "event_id": "b5d63825c28cf880136fcf05187d34ec9b14c1ca733263b121b3d94ed3a57d04"
+      }
+    }
+  }
+}

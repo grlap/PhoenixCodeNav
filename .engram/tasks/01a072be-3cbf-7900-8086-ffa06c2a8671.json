@@ -1,0 +1,51 @@
+{
+  "id": "01a072be-3cbf-7900-8086-ffa06c2a8671",
+  "external_ref": null,
+  "title": "Daemon handshake refuses clients when the workspace-root drive letter case differs (Windows)",
+  "outcome": "On Windows, clients and daemon launched for the same physical worktree with differently spelled --workspace-root (c:/dev/monolith vs . resolving to C:\\dev\\monolith) agree on the endpoint (physical identity) but disagree on DatabaseKey, so default-path clients are refused with daemon_index_destination_mismatch. Fix: make the DatabaseKey derivation case-insensitive on Windows consistently with WorkspacePaths.FileSystemPathComparison, without breaking mixed-version daemon/client pairs whose launch strings already match.",
+  "acceptance": [
+    "Daemon handshake refuses clients when the workspace-root drive letter case differs (Windows) is done"
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "bug",
+  "priority": 1,
+  "labels": [
+    "daemon",
+    "mcp-contract",
+    "windows"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "completed",
+  "parent_id": null,
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": {
+    "summary": "Delivered v0.12.85 canonical daemon destination identity across Windows drive-case, separator, dot/trailing, junction/symlink, and explicit database-path aliases, with bounded legacy handshake compatibility and decisive unit/live regressions.",
+    "completed_at": "2026-09-05T20:27:01.690694100Z",
+    "actor": {
+      "actor_id": "greg/codex",
+      "actor_kind": "agent"
+    }
+  },
+  "activity": {
+    "central": {
+      "6a930ce364ec65f50b8d05d77186bcb00172f1d5ef0c888cb8818a135b220a82": {
+        "activity_id": "6a930ce364ec65f50b8d05d77186bcb00172f1d5ef0c888cb8818a135b220a82",
+        "task_id": "01a072be-3cbf-7900-8086-ffa06c2a8671",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "greg/codex",
+          "actor_kind": "agent"
+        },
+        "state": "finished",
+        "state_revision": 2,
+        "event_id": "b7f20b05d47bedf33ba9f4be3b244e5e18d320b9c6600188c3d184969842ce21"
+      }
+    }
+  }
+}

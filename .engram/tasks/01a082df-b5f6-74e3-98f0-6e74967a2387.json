@@ -1,0 +1,33 @@
+{
+  "id": "01a082df-b5f6-74e3-98f0-6e74967a2387",
+  "external_ref": null,
+  "title": "Use one cancellation token in the bounded MSBuild evaluator hierarchy",
+  "outcome": "The shared traversal and F# projection observe one cancellation source without duplicate fields/helpers.",
+  "acceptance": [
+    "BoundedMsBuildProjectEvaluator and its F# subclass no longer store duplicate copies of the same CancellationToken.",
+    "Existing cancellation-before-and-during-import traversal coverage remains green."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "task",
+  "priority": 3,
+  "labels": [
+    "architecture",
+    "csharp",
+    "fsharp",
+    "msbuild",
+    "review",
+    "semantic",
+    "semantic-correctness"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "superseded",
+  "parent_id": "01a082b2-8ca8-7761-ad78-7f9dd9b090b7",
+  "child_requirement": "optional",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": "01a10ea5-e74f-7e81-958e-51596dd37085",
+  "disposal_reason": "Greg explicitly requested this follow-up; continue independently because its original parent is completed.",
+  "completion": null
+}

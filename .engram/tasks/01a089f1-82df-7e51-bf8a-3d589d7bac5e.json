@@ -1,0 +1,31 @@
+{
+  "id": "01a089f1-82df-7e51-bf8a-3d589d7bac5e",
+  "external_ref": null,
+  "title": "Cover simple-model default compile items, signatures and remove/re-include",
+  "outcome": "Cover simple-model default compile items, signatures and remove/re-include",
+  "acceptance": [
+    "Simple projection tests pin default-item ordering, .fsi handling, and Compile Remove followed by re-include with exact SourceFiles sequences; native-order parity claims require a native comparison."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "task",
+  "priority": 2,
+  "labels": [
+    "fsharp",
+    "msbuild",
+    "pilot",
+    "project-model",
+    "review",
+    "testing"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "open",
+  "parent_id": "01a089a5-604d-7a91-b551-f486866243fd",
+  "child_requirement": "optional",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": null
+}

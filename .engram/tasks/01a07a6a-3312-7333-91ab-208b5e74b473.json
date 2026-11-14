@@ -1,0 +1,54 @@
+{
+  "id": "01a07a6a-3312-7333-91ab-208b5e74b473",
+  "external_ref": null,
+  "title": "Scope Batch41 strict handle-release proof away from whole Git repository cleanup",
+  "outcome": "Scope Batch41 strict handle-release proof away from whole Git repository cleanup",
+  "acceptance": [
+    "Strict zero-retry assertions target only manager-owned index artifacts or another explicitly approved deterministic scope.",
+    "Temporary Git repository teardown remains best-effort.",
+    "The focused Batch41 tests and full quality gates pass."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "task",
+  "priority": 2,
+  "labels": [
+    "infrastructure",
+    "review",
+    "temp-cleanup",
+    "testing"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "completed",
+  "parent_id": "01a078ae-bdca-7b30-a846-3887ea1da0de",
+  "child_requirement": "optional",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": {
+    "summary": "Narrowed every B2a strict call away from temporary repositories, worktrees, source roots, containers, and external marker roots. Strict proof now targets only .codenav/index artifacts and the explicit foreign-claim auxiliary root; root cleanup is tolerant and wrapper residual accounting is authoritative.",
+    "completed_at": "2026-09-07T06:03:47.738415100Z",
+    "actor": {
+      "actor_id": "greg/codex",
+      "actor_kind": "agent"
+    }
+  },
+  "activity": {
+    "central": {
+      "af128a3c124283d206beaf8b88cacdc11b40b8366e8c2c281ca407cdfaec80ee": {
+        "activity_id": "af128a3c124283d206beaf8b88cacdc11b40b8366e8c2c281ca407cdfaec80ee",
+        "task_id": "01a07a6a-3312-7333-91ab-208b5e74b473",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "greg/codex",
+          "actor_kind": "agent"
+        },
+        "state": "finished",
+        "state_revision": 2,
+        "event_id": "335a8e423e2b936aa686c3f96e00ba527ff202cea00fa182c737862a76fbf4c7"
+      }
+    }
+  }
+}

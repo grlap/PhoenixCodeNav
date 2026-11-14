@@ -1,0 +1,75 @@
+{
+  "id": "01a08298-8fc2-7781-90fb-e9d128515475",
+  "external_ref": null,
+  "title": "Adopt the shared bounded MSBuild evaluator for C# semantics",
+  "outcome": "C# and F# semantic project construction consume the same bounded evaluator while ownership remains conservative and separate.",
+  "acceptance": [
+    "C# semantic preparation consumes indexed-only imports and Exists dependencies with invalidation identity.",
+    "Existing shared evaluator limits remain unchanged; no new or raised limits are introduced.",
+    "Full gates pass and the final diff receives one dual-agent adversarial review.",
+    "Paired legacy/SDK project identity remains one project and conservative ownership parsing remains separate.",
+    "StartsWith semantics and every intentional C# behavior delta are pinned."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "task",
+  "priority": 1,
+  "labels": [
+    "architecture",
+    "csharp",
+    "fsharp",
+    "msbuild",
+    "semantic",
+    "semantic-correctness"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "open",
+  "parent_id": "01a08293-8ab2-7ee0-876d-1fe9ef5192ee",
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": null,
+  "activity": {
+    "central": {
+      "1e73bdde1e608dfc4d6195c25857d46974de2a43af57d9ec5d22a25986948173": {
+        "activity_id": "1e73bdde1e608dfc4d6195c25857d46974de2a43af57d9ec5d22a25986948173",
+        "task_id": "01a08298-8fc2-7781-90fb-e9d128515475",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "greg/codex",
+          "actor_kind": "agent"
+        },
+        "state": "released",
+        "state_revision": 2,
+        "event_id": "8dbb8adf68690fe6ce10f672fe0eff685a81c50d29bee253c5cc71f1281e1e34"
+      },
+      "98ea7898b7d11ade2d662f2522362b001f69e28537b7cc4b722d6b893dfd6903": {
+        "activity_id": "98ea7898b7d11ade2d662f2522362b001f69e28537b7cc4b722d6b893dfd6903",
+        "task_id": "01a08298-8fc2-7781-90fb-e9d128515475",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "greg/codex",
+          "actor_kind": "agent"
+        },
+        "state": "started",
+        "state_revision": 1,
+        "event_id": "98ea7898b7d11ade2d662f2522362b001f69e28537b7cc4b722d6b893dfd6903"
+      },
+      "c5f56a27b6a3db9b46535276d0d10d4977ac17a9e920808be461acb516485aa2": {
+        "activity_id": "c5f56a27b6a3db9b46535276d0d10d4977ac17a9e920808be461acb516485aa2",
+        "task_id": "01a08298-8fc2-7781-90fb-e9d128515475",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "greg/codex",
+          "actor_kind": "agent"
+        },
+        "state": "started",
+        "state_revision": 1,
+        "event_id": "c5f56a27b6a3db9b46535276d0d10d4977ac17a9e920808be461acb516485aa2"
+      }
+    }
+  }
+}

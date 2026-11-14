@@ -1,0 +1,47 @@
+{
+  "id": "01a06aeb-e942-70b2-8181-7cffb686dc03",
+  "external_ref": null,
+  "title": "Justify or remove the TestOnlyContextPackHealth seam added in 13e8a73",
+  "outcome": "13e8a73 introduced a new test-only property NavigationTools.TestOnlyContextPackHealth that the changeset-3 ruling did not authorize (the ruling allowed extending the existing TestOnlySemanticFailureReason seam only). Reviewed clean by the dual review; reviewer-side record so new seams stay deliberate.",
+  "acceptance": [
+    "Either the seam is shown to be the only way to assert the context_pack bounded-envelope meta under a non-default IndexHealth (recorded on this item with the test that needs it), or it is removed in favor of an existing seam; no product behavior change"
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "chore",
+  "priority": 3,
+  "labels": [],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "completed",
+  "parent_id": null,
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": {
+    "summary": "Documented and independently approved the precise need and scope for TestOnlyContextPackHealth; no code change required.",
+    "completed_at": "2026-09-04T05:41:48.197793200Z",
+    "actor": {
+      "actor_id": "termal",
+      "actor_kind": "agent"
+    }
+  },
+  "activity": {
+    "central": {
+      "09fb4afd511862127206afc3d5edf7d6d2108627c57b7269b0247270b28fc311": {
+        "activity_id": "09fb4afd511862127206afc3d5edf7d6d2108627c57b7269b0247270b28fc311",
+        "task_id": "01a06aeb-e942-70b2-8181-7cffb686dc03",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "termal",
+          "actor_kind": "agent"
+        },
+        "state": "finished",
+        "state_revision": 2,
+        "event_id": "b95d41bde8b0dabc041e35942491b922b15ed565965ef4daf56c9933a790752c"
+      }
+    }
+  }
+}

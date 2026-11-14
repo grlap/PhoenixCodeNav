@@ -1,0 +1,63 @@
+{
+  "id": "01a092f1-face-7971-be9d-59ede4bd4c81",
+  "external_ref": null,
+  "title": "Pin required FCS timing phases for assembly-content navigation",
+  "outcome": "Successful callers, callees and implementations tests require every phase entered by checkAssemblyContents rather than accepting a subset of timing fields.",
+  "acceptance": [
+    "A mutation removing checkAssemblyContents setup/project-check instrumentation fails the relevant required-phase assertions, and the restored implementation passes.",
+    "Existing successful callers/callees/implementations telemetry tests require snapshotCaptureMs, fcsSetupMs and projectParseAndCheckMs; callers/implementations require fileParseAndCheckMs, while callees keeps its absence assertion."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "task",
+  "priority": 2,
+  "labels": [
+    "review",
+    "testing"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "completed",
+  "parent_id": "01a06ec3-2b25-79a0-bc69-89d0d8974a3d",
+  "child_requirement": "optional",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": {
+    "summary": "Published 4294b363770d85fda540a2265b79e51bc6196fcf; installed v0.12.109 at C:/tools/phoenix-pilot. Verified resolved in the final reviewed bytes: exact successful FCS phase sets; separate setup/project removal controls each fail callers and implementations on the missing field; restored focused 7/7 and full suite green. No separate callees mutant failure is claimed.",
+    "completed_at": "2026-09-12T01:10:01.408707100Z",
+    "actor": {
+      "actor_id": "greg/codex",
+      "actor_kind": "agent"
+    }
+  },
+  "activity": {
+    "central": {
+      "768b112d8e8feba22ddfa5ee13b374f22f8623e6455dd1652ea8d08fdce336e8": {
+        "activity_id": "768b112d8e8feba22ddfa5ee13b374f22f8623e6455dd1652ea8d08fdce336e8",
+        "task_id": "01a092f1-face-7971-be9d-59ede4bd4c81",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "greg/codex",
+          "actor_kind": "agent"
+        },
+        "state": "finished",
+        "state_revision": 2,
+        "event_id": "d2f5242cbca7562bc762c2b91784420a8bfd95d62a5888e9e090f582627e6d39"
+      },
+      "dd2e6cc0f7d5fd38369bb712a9ffc12e829990d2f12594534c8d90a523bcadf3": {
+        "activity_id": "dd2e6cc0f7d5fd38369bb712a9ffc12e829990d2f12594534c8d90a523bcadf3",
+        "task_id": "01a092f1-face-7971-be9d-59ede4bd4c81",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "greg/codex",
+          "actor_kind": "agent"
+        },
+        "state": "released",
+        "state_revision": 2,
+        "event_id": "1da51d842fee204f91c6931963b5d64ae1e711491ade517ffafe73b132201e9a"
+      }
+    }
+  }
+}

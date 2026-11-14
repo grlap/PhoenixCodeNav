@@ -1,0 +1,54 @@
+{
+  "id": "01a08888-4f7d-7650-bfcb-beaba3c08b8a",
+  "external_ref": null,
+  "title": "Preserve ThisFileDirectoryNoRoot trailing separator at a filesystem root",
+  "outcome": "Preserve ThisFileDirectoryNoRoot trailing separator at a filesystem root",
+  "acceptance": [
+    "SharedPathPropertiesDistinguishNoRootDirectoryConventionsAtFilesystemRoot passes: ProjectDirectoryNoRoot is empty while ThisFileDirectoryNoRoot is the host separator at a filesystem root."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "bug",
+  "priority": 2,
+  "labels": [
+    "architecture",
+    "csharp",
+    "fsharp",
+    "msbuild",
+    "review",
+    "semantic-correctness"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "completed",
+  "parent_id": "01a08871-6a84-7aa1-9265-c202f2be4cd9",
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": {
+    "summary": "Moved document trailing-separator normalization after host-root removal. Parent RED reproduces empty instead of separator at the root; final focused run 71/71 includes the fixed root case and both full property families. Evidence: artifacts/msbuild-path-context/path-context-root-boundary-red.trx and path-context-final-focused-green.trx. Native expected-value measurement was Fable's Microsoft.Build oracle, not a parent-run MSBuild test.",
+    "completed_at": "2026-09-09T23:38:10.048927600Z",
+    "actor": {
+      "actor_id": "greg/codex",
+      "actor_kind": "agent"
+    }
+  },
+  "activity": {
+    "central": {
+      "9655f30fad0d1ceb393bc3af07be6b83af59ac79fabd70291b28b755a4e8eb4c": {
+        "activity_id": "9655f30fad0d1ceb393bc3af07be6b83af59ac79fabd70291b28b755a4e8eb4c",
+        "task_id": "01a08888-4f7d-7650-bfcb-beaba3c08b8a",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "greg/codex",
+          "actor_kind": "agent"
+        },
+        "state": "finished",
+        "state_revision": 2,
+        "event_id": "a5e3d4b86d55569ce1d876687c822c69d7a2adc5e09927731e52c9acb00c812f"
+      }
+    }
+  }
+}

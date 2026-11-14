@@ -1,0 +1,50 @@
+{
+  "id": "01a069b3-c8df-76f1-bcfc-b5a7e403e9b8",
+  "external_ref": null,
+  "title": "Explain Unix daemon stream isolation at PreventParentStreamInheritance",
+  "outcome": "Future maintainers can see that redirected stdout/stderr replace Unix descriptors 1 and 2, while Windows still requires SetHandleInformation.",
+  "acceptance": [
+    "The method comment or early-return comment states why Unix needs no explicit inheritance mutation and accurately scopes the Windows-only handle operation."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "task",
+  "priority": 2,
+  "labels": [
+    "architecture",
+    "review"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "completed",
+  "parent_id": null,
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": {
+    "summary": "Daemon stream-isolation documentation now scopes the explicit inheritance mutation to Windows and explains why redirected Unix descriptors need no separate mutation.",
+    "completed_at": "2026-09-04T00:22:13.172738900Z",
+    "actor": {
+      "actor_id": "termal",
+      "actor_kind": "agent"
+    }
+  },
+  "activity": {
+    "central": {
+      "e223889a5dbee8ac20b3543a90a50fa4a4aa5c853b6171685c84a6b74e0e1767": {
+        "activity_id": "e223889a5dbee8ac20b3543a90a50fa4a4aa5c853b6171685c84a6b74e0e1767",
+        "task_id": "01a069b3-c8df-76f1-bcfc-b5a7e403e9b8",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "termal",
+          "actor_kind": "agent"
+        },
+        "state": "finished",
+        "state_revision": 2,
+        "event_id": "d30772b543bf4305badfa6845aff76ff3d3815875d093f966e0125d8c679a801"
+      }
+    }
+  }
+}

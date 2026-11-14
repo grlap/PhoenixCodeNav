@@ -1,0 +1,28 @@
+{
+  "id": "01a06b2c-451b-7f40-93b2-afcc40d4b02e",
+  "external_ref": null,
+  "title": "Align the remaining daemon shutdown paragraph with the actual retirement order",
+  "outcome": "The design document describes daemon shutdown consistently with DaemonServer.RunAsync.",
+  "acceptance": [
+    "The final-shutdown paragraph states endpoint removal, admitted-request drain, semantic/index disposal with writer-lease release, then own-descriptor removal"
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "task",
+  "priority": 3,
+  "labels": [
+    "architecture",
+    "documentation",
+    "review"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "superseded",
+  "parent_id": "01a06884-02d0-7041-91b2-f26f6dd69464",
+  "child_requirement": "optional",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": "01a091fc-69c6-7c43-8571-82c8e05b2cab",
+  "disposal_reason": "Continue as independent work. Coordinator-assigned daemon batch after completed parent; preserve acceptance and origin without reopening the parent.",
+  "completion": null
+}

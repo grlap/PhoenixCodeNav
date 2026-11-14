@@ -1,0 +1,32 @@
+{
+  "id": "01a07843-8554-7460-90af-6d592d9e8080",
+  "external_ref": null,
+  "title": "Split outline and source_context out of NavigationTools.Search.cs",
+  "outcome": "NavigationTools search and source-navigation concerns are represented by accurately named, cohesive partial files.",
+  "acceptance": [
+    "The move preserves all MCP names, attributes, defaults, and behavior and passes the required gates",
+    "outline and source_context live in an accurately named concern partial while find_file, search_text, and search_symbol remain in NavigationTools.Search.cs"
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "task",
+  "priority": 3,
+  "labels": [
+    "agent-experience",
+    "architecture",
+    "maintainability",
+    "mcp-contract",
+    "review",
+    "structure"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "cancelled",
+  "parent_id": "01a07795-f400-71c2-a722-c534c5fb9bec",
+  "child_requirement": "optional",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": "Re-homed as required structure-track packet w-841054974364 per owner ruling after packet 4 review.",
+  "completion": null
+}

@@ -1,0 +1,44 @@
+{
+  "id": "01a07df9-b1e3-7541-bd2b-1b386df913d5",
+  "external_ref": null,
+  "title": "Complete shared-daemon teardown before rethrowing client disposal failures",
+  "outcome": "Complete shared-daemon teardown before rethrowing client disposal failures",
+  "acceptance": [
+    "An injected client-disposal failure cannot bypass remaining client, daemon, runtime-mode, or workspace teardown and still causes the test to fail."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "task",
+  "priority": 2,
+  "labels": [
+    "infrastructure",
+    "review",
+    "testing"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "superseded",
+  "parent_id": "01a078ae-bdca-7b30-a846-3887ea1da0de",
+  "child_requirement": "optional",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": "01a07df9-b264-7d13-9082-953f55eac3e5",
+  "disposal_reason": "Consolidated with the other B3d teardown-shape and TestSupport placement findings per Fable #718.",
+  "completion": null,
+  "activity": {
+    "central": {
+      "9a6d78b0dc001e4b14215bee8cb9fbec079784496392995643acae6c93988025": {
+        "activity_id": "9a6d78b0dc001e4b14215bee8cb9fbec079784496392995643acae6c93988025",
+        "task_id": "01a07df9-b1e3-7541-bd2b-1b386df913d5",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "greg/codex",
+          "actor_kind": "agent"
+        },
+        "state": "abandoned",
+        "state_revision": 2,
+        "event_id": "39552bbad8f24eb8eb6165607dd37758620424d2b3598d5c7eb00ad66db4e9fc"
+      }
+    }
+  }
+}

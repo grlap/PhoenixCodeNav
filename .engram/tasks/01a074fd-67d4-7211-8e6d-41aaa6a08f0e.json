@@ -1,0 +1,32 @@
+{
+  "id": "01a074fd-67d4-7211-8e6d-41aaa6a08f0e",
+  "external_ref": null,
+  "title": "Avoid eager FullType formatting for every F# call-graph symbol",
+  "outcome": "Preserve overload-stable call grouping without rendering full compiler types on every mapped symbol.",
+  "acceptance": [
+    "External overloads remain distinct and generic instantiations remain one callee group",
+    "Identity formatting or an equivalent discriminator is computed only for symbols that participate in grouping or output",
+    "Representative caller traversal evidence shows per-binding FullType rendering is eliminated"
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "task",
+  "priority": 2,
+  "labels": [
+    "fsharp",
+    "mcp-contract",
+    "performance",
+    "review",
+    "semantic"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "open",
+  "parent_id": "01a063dd-580b-7480-8d28-895853574bf6",
+  "child_requirement": "optional",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": null
+}

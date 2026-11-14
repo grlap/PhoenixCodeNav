@@ -1,0 +1,27 @@
+{
+  "id": "01a07085-848e-7113-9679-9755496df300",
+  "external_ref": null,
+  "title": "Disclose F# references exact-with-lower-bound confidence in capabilities",
+  "outcome": "Runtime capability guidance explains exact F# references without implying workspace completeness.",
+  "acceptance": [
+    "The confidence capability and agent guidance state that result-scope coverage can remain partial/lower-bound while selected-context confidence is exact."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "bug",
+  "priority": 2,
+  "labels": [
+    "mcp-contract",
+    "review"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "open",
+  "parent_id": "01a063dd-54f4-7d22-8647-caeefe63e36e",
+  "child_requirement": "optional",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": null
+}

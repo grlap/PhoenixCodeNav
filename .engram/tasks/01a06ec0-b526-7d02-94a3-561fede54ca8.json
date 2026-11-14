@@ -1,0 +1,53 @@
+{
+  "id": "01a06ec0-b526-7d02-94a3-561fede54ca8",
+  "external_ref": null,
+  "title": "Scope semantic cold-start phase timing to the C# semantic pipeline",
+  "outcome": "The semantic-cold-start capability and agent guidance precisely state which language pipeline emits the phase snapshot, and F# definition is never falsely advertised as carrying C# load/preparation phases.",
+  "acceptance": [
+    "Contract tests prove the language scope and the exact F# definition contract remains truthful.",
+    "The features[] summary and user/agent guidance explicitly scope semanticColdStart phase timing to C# definition, references, implementations, and type_hierarchy.",
+    "The original Codex reviewer session verifies the High is resolved on the final bytes."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "bug",
+  "priority": 1,
+  "labels": [
+    "mcp-contract",
+    "review",
+    "semantic-correctness"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "completed",
+  "parent_id": "01a063dd-5ecb-7000-814f-7cc52012253b",
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": {
+    "summary": "Scoped semantic cold-start phase timing to calls that enter the C# semantic pipeline; features[] and agent guidance now state that scope, while exact F# definition truthfully omits semanticColdStart and semanticOp.",
+    "completed_at": "2026-09-05T00:02:35.662383800Z",
+    "actor": {
+      "actor_id": "greg/codex",
+      "actor_kind": "agent"
+    }
+  },
+  "activity": {
+    "central": {
+      "20bfffdc06fc345589c5efaa2b96966952f6b173b7bc1854595971b08894560c": {
+        "activity_id": "20bfffdc06fc345589c5efaa2b96966952f6b173b7bc1854595971b08894560c",
+        "task_id": "01a06ec0-b526-7d02-94a3-561fede54ca8",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "greg/codex",
+          "actor_kind": "agent"
+        },
+        "state": "finished",
+        "state_revision": 2,
+        "event_id": "bc1745d9098a4810efb6f2a2269e30eb8cc6d0205366decede7cc915f1934121"
+      }
+    }
+  }
+}

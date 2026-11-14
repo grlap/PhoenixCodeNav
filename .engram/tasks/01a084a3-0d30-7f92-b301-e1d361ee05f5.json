@@ -1,0 +1,28 @@
+{
+  "id": "01a084a3-0d30-7f92-b301-e1d361ee05f5",
+  "external_ref": null,
+  "title": "Disclose assumed F# context and clarify conditional overrides",
+  "outcome": "Disclose assumed F# context and clarify conditional overrides",
+  "acceptance": [
+    "Effective assumed context is disclosed and conditional versus unconditional override policy is explicit."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "bug",
+  "priority": 2,
+  "labels": [
+    "fsharp",
+    "review",
+    "semantic-correctness"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "superseded",
+  "parent_id": "01a0848a-6f6f-72b0-88b4-3f088a5ea862",
+  "child_requirement": "optional",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": "01a084fb-b27a-79b2-93f8-5c2125ead5d8",
+  "disposal_reason": "Already addressed within reviewed .97 initial-context fix; detach from completed .96 parent to record verified completion.",
+  "completion": null
+}

@@ -1,0 +1,30 @@
+{
+  "id": "01a0913f-1053-7a03-9de9-84d395c52c2f",
+  "external_ref": null,
+  "title": "Cover public static daemon cause members in the recovery catalog guard",
+  "outcome": "The product catalog expectation test covers every declared DaemonFailureCause regardless of static member visibility, while keeping current explicit recovery expectations.",
+  "acceptance": [
+    "The catalog expectation guard includes public and non-public static cause members, and a focused discrimination check demonstrates that a public static catalog cause cannot evade the explicit expectation check."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "task",
+  "priority": 3,
+  "labels": [
+    "architecture",
+    "daemon",
+    "mcp-contract",
+    "review",
+    "testing"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "superseded",
+  "parent_id": "01a0910d-dce0-7440-a1b6-b1ed34981a72",
+  "child_requirement": "optional",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": "01a09140-2253-7e90-bf71-937ec93dd0f6",
+  "disposal_reason": "Continue as independent work. Created as an optional review child under w-b1ed34981a72 as required by the review workflow; that verified stream-pair fix is now complete. Engram's done/show receipt reports this optional child stranded and explicitly recommends detach. Preserve the creation/origin notes and keep this nonblocking Low follow-up actionable without reopening the satisfied parent.",
+  "completion": null
+}

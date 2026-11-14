@@ -1,0 +1,52 @@
+{
+  "id": "01a08ea9-6a63-7500-a96f-e72522920e29",
+  "external_ref": null,
+  "title": "Guard session-recovery allowlist against production failure-factory drift",
+  "outcome": "Guard session-recovery allowlist against production failure-factory drift",
+  "acceptance": [
+    "Regression coverage exercises actual startup/index/retirement/proxy failure factories and checks explicit intended session-recovery eligibility; adding or changing a relevant production cause cannot silently strand a recoverable session. Keep intentional advice/eligibility divergences explicit rather than restoring Retryable as the policy."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "task",
+  "priority": 3,
+  "labels": [
+    "daemon",
+    "recovery",
+    "review",
+    "testing"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "completed",
+  "parent_id": null,
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": {
+    "summary": "Shared production launch/report factories are used by Bootstrap and Proxy; tests characterize all four fields and wording, nullable/numeric process codes and report-path inner exceptions. Actual startup/index/retirement/proxy factory tests use explicit cause-policy expectations independent of retryable, with exhaustive IndexStartupFailureCause coverage. Removing an actual writer-unavailable allowlist entry caused the intended factory guard failure. Coverage guards current relevant producers, not every conceivable future ad-hoc constructor; launch-path inner-exception preservation remains source-inspected. Final complete gates and fresh Codex/Claude full-union review passed. New Low CLI test/doc follow-up is tracked separately as w-129583275429. Implemented and reviewed; not committed or pushed.",
+    "completed_at": "2026-09-11T05:42:16.273064200Z",
+    "actor": {
+      "actor_id": "greg/codex",
+      "actor_kind": "agent"
+    }
+  },
+  "activity": {
+    "central": {
+      "a511a24331102994443b73e7c09ba1f5770a435cf7ad52a84a87453be857e5a9": {
+        "activity_id": "a511a24331102994443b73e7c09ba1f5770a435cf7ad52a84a87453be857e5a9",
+        "task_id": "01a08ea9-6a63-7500-a96f-e72522920e29",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "greg/codex",
+          "actor_kind": "agent"
+        },
+        "state": "finished",
+        "state_revision": 2,
+        "event_id": "c13808ded31292a714f9f7bf9514fcd4f9061ec3f27ecc2121dc8dddd82ceaca"
+      }
+    }
+  }
+}

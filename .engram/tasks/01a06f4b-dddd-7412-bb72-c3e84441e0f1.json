@@ -1,0 +1,24 @@
+{
+  "id": "01a06f4b-dddd-7412-bb72-c3e84441e0f1",
+  "external_ref": null,
+  "title": "Acceptance protocol: medians of five fresh-daemon unprofiled cold/warm pairs per build",
+  "outcome": "Every before/after claim on cold-start optimization is judged on medians of five fresh-daemon, unprofiled cold/warm pairs, same command and RavenDB commit (a49b670) as the baseline, on a stated PhoenixCodeNav build stamp; single runs are not evidence. Reason (w-418276aea485 late notes, 2026-09-05): two fresh-daemon runs on the same source differed in compilationPreparation totalMs 1295.9 vs 2235.8, processWideCpuMs 4390.6 vs 12828.1, busySumMs 2407.8 vs 3604.5, while gcPauseMs held at 525 vs 496; a sampling profiler distorted the public phase totals (preparation 2754 vs 897 unprofiled, metadata 1895 vs 35), so profiled runs give composition only, never totals.",
+  "acceptance": [
+    "Acceptance protocol: medians of five fresh-daemon unprofiled cold/warm pairs per build is done"
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "chore",
+  "priority": 1,
+  "labels": [],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "open",
+  "parent_id": "01a063dd-5e2a-7431-bd00-c1d34e0ba396",
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": null
+}

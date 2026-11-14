@@ -1,0 +1,54 @@
+{
+  "id": "01a087e8-d939-75d2-a325-0edf24339143",
+  "external_ref": null,
+  "title": "Keep invariant-condition proofs sound across mutable syntax expansion",
+  "outcome": "Keep invariant-condition proofs sound across mutable syntax expansion",
+  "acceptance": [
+    "Preserve screenshot fix and mutable-false ordering refusal; complete gates and same-original-reviewer verification.",
+    "Public-parser regression for Mutable=false then quote-bearing true' Or 'true reassignment cannot silently omit a previously skipped Compile input; ordinary evaluation and proof agree or explicitly refuse."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "bug",
+  "priority": 1,
+  "labels": [
+    "csharp",
+    "fsharp",
+    "msbuild",
+    "review",
+    "semantic-correctness"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "completed",
+  "parent_id": "01a087c1-16bb-71d0-b87d-168e1dc3ce1e",
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": {
+    "summary": "Raw condition grammar and scalar-only operand expansion resolve the original High, verified by original Codex reviewer with independent public-parser controls and original Claude source review; full gates green.",
+    "completed_at": "2026-09-09T21:16:44.419014Z",
+    "actor": {
+      "actor_id": "greg/codex",
+      "actor_kind": "agent"
+    }
+  },
+  "activity": {
+    "central": {
+      "8c744dbf9a56e458c67829c12665568f67530647fde5c81fdb2d78bfdacfa084": {
+        "activity_id": "8c744dbf9a56e458c67829c12665568f67530647fde5c81fdb2d78bfdacfa084",
+        "task_id": "01a087e8-d939-75d2-a325-0edf24339143",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "greg/codex",
+          "actor_kind": "agent"
+        },
+        "state": "finished",
+        "state_revision": 2,
+        "event_id": "6896eb3d3f43625a068c18b80642a5063494037f5bb0159bf67e22979d9c6da0"
+      }
+    }
+  }
+}

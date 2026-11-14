@@ -1,0 +1,54 @@
+{
+  "id": "01a1af5f-6e22-7f83-8e42-5033267d578c",
+  "external_ref": null,
+  "title": "Declare Phoenix test commands and ignore generated submodule runtime",
+  "outcome": "Land exactly termal-tests.toml and the prerequisite script's self-ignore setup under Greg's explicit one-commit authorization.",
+  "acceptance": [
+    "The root declaration provides one exact build-enabled net10.0 dotnet test command and distinct ignored TRX path for each of the five existing test projects.",
+    "Prerequisite preparation preserves existing child .gitignore files, creates missing self-ignore rules for generated .codenav runtime, and keeps pinned upstream commits and tracked child trees unchanged.",
+    "The exact two-file change passes repository-required validation and independent review, then lands in one explicitly scoped commit without unrelated paths."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "chore",
+  "priority": 2,
+  "labels": [],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "open",
+  "parent_id": null,
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": null,
+  "activity": {
+    "central": {
+      "6d727c3be41a45b888954d6f5be01f56": {
+        "activity_id": "6d727c3be41a45b888954d6f5be01f56",
+        "task_id": "01a1af5f-6e22-7f83-8e42-5033267d578c",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "greg/codex",
+          "actor_kind": "agent"
+        },
+        "state": "started",
+        "state_revision": 1,
+        "event_id": "6d727c3be41a45b888954d6f5be01f56"
+      },
+      "cc74c7f0879e4a12a65dcf54eee2067d": {
+        "activity_id": "cc74c7f0879e4a12a65dcf54eee2067d",
+        "task_id": "01a1af5f-6e22-7f83-8e42-5033267d578c",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "greg/codex",
+          "actor_kind": "agent"
+        },
+        "state": "started",
+        "state_revision": 1,
+        "event_id": "cc74c7f0879e4a12a65dcf54eee2067d"
+      }
+    }
+  }
+}

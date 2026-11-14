@@ -1,0 +1,83 @@
+{
+  "id": "01a063dd-6801-7a90-a844-141790985837",
+  "external_ref": null,
+  "title": "Choose PhoenixCodeNav license or public use terms",
+  "outcome": "Choose PhoenixCodeNav license or public use terms",
+  "acceptance": [
+    "Choose PhoenixCodeNav license or public use terms is done"
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "task",
+  "priority": 1,
+  "labels": [],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "completed",
+  "parent_id": null,
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": {
+    "summary": "Selected and implemented Apache-2.0 for PhoenixCodeNav under the public attribution Greg Lapinski, with complete third-party and binary distribution terms.",
+    "completed_at": "2026-09-03T19:06:48.404912900Z",
+    "actor": {
+      "actor_id": "termal",
+      "actor_kind": "agent"
+    }
+  },
+  "activity": {
+    "central": {
+      "0335ebb5e4d55fe422217178b3b7e8b84d74465b3086bb7f719bbb8e70a76b86": {
+        "activity_id": "0335ebb5e4d55fe422217178b3b7e8b84d74465b3086bb7f719bbb8e70a76b86",
+        "task_id": "01a063dd-6801-7a90-a844-141790985837",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "termal",
+          "actor_kind": "agent"
+        },
+        "state": "released",
+        "state_revision": 2,
+        "event_id": "01d500b4813e31fdaa2dd3859a57239cf07b3157b3cd17cc78567c4a504f2e27"
+      },
+      "52fbb6c6744d73b828d06e14fd1bcf19d461dd60d594b78b5a3212a4c4151215": {
+        "activity_id": "52fbb6c6744d73b828d06e14fd1bcf19d461dd60d594b78b5a3212a4c4151215",
+        "task_id": "01a063dd-6801-7a90-a844-141790985837",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "fable",
+          "actor_kind": "agent"
+        },
+        "state": "released",
+        "state_revision": 2,
+        "event_id": "968c66e8db68b7e7b9a1da2b69ff085912a5d2d48fa8a80a6288a4736ecf6ed4"
+      },
+      "636e8248606233b287112f520db62da8870eff64d0f9adc526553bd88c747bbe": {
+        "activity_id": "636e8248606233b287112f520db62da8870eff64d0f9adc526553bd88c747bbe",
+        "task_id": "01a063dd-6801-7a90-a844-141790985837",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "termal",
+          "actor_kind": "agent"
+        },
+        "state": "released",
+        "state_revision": 2,
+        "event_id": "97729c5f5d0a467ba6092119bba46aff373bab22951fa091ed9c1723d1e4599b"
+      },
+      "c0708d3f2007fe28efd842a954801dbcac1151a491ae97cd646d36da8b0371c7": {
+        "activity_id": "c0708d3f2007fe28efd842a954801dbcac1151a491ae97cd646d36da8b0371c7",
+        "task_id": "01a063dd-6801-7a90-a844-141790985837",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "termal",
+          "actor_kind": "agent"
+        },
+        "state": "finished",
+        "state_revision": 2,
+        "event_id": "78ed3d63309f699c87b3f96d214a3d88631f6d2e6662d8b5e774c19e1f9834a1"
+      }
+    }
+  }
+}

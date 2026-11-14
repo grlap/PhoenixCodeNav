@@ -1,0 +1,27 @@
+{
+  "id": "01a088a3-8682-71b0-aa72-74cde4e56436",
+  "external_ref": null,
+  "title": "Remove the test-only static MSBuild project-context SeedProperties overload",
+  "outcome": "Remove the test-only static MSBuild project-context SeedProperties overload",
+  "acceptance": [
+    "Suggested fix: switch those four call sites to new BoundedMsBuildProjectContext(path).SeedProperties(properties) and delete the static overload."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "task",
+  "priority": 3,
+  "labels": [
+    "review",
+    "testing"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "open",
+  "parent_id": null,
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": null
+}

@@ -1,0 +1,54 @@
+{
+  "id": "01a08cff-d519-7e41-948a-e58eb3c4975e",
+  "external_ref": null,
+  "title": "Use a thread-safe log sink in the F# project-model environment test",
+  "outcome": "Use a thread-safe log sink in the F# project-model environment test",
+  "acceptance": [
+    "ProjectModelEnvironmentRecognizesTrimmedCaseVariantsAndWarnsOnInvalidValues uses a concurrency-safe log sink and snapshots it before assertions; full gate remains green."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "bug",
+  "priority": 2,
+  "labels": [
+    "default",
+    "fsharp",
+    "project-model",
+    "review",
+    "semantic",
+    "testing"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "completed",
+  "parent_id": "01a08c62-5bc9-79f0-9fc2-85a2ed0d7c4b",
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": {
+    "summary": "ConcurrentQueue.Enqueue and ToArray snapshot remove the unsafe test log sink; all three exact selection/warning rows passed. Former live-portal race remains reasoned, not experimentally reproduced.",
+    "completed_at": "2026-09-10T20:49:38.536034600Z",
+    "actor": {
+      "actor_id": "greg/codex",
+      "actor_kind": "agent"
+    }
+  },
+  "activity": {
+    "central": {
+      "038e7016a4d056b143699fc6c7cb49e6ed7d4eed6dd36a64244bc3a4c2c52d82": {
+        "activity_id": "038e7016a4d056b143699fc6c7cb49e6ed7d4eed6dd36a64244bc3a4c2c52d82",
+        "task_id": "01a08cff-d519-7e41-948a-e58eb3c4975e",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "greg/codex",
+          "actor_kind": "agent"
+        },
+        "state": "finished",
+        "state_revision": 2,
+        "event_id": "4f0c56f78299accada0f27d21d70e03b23167ab8e245b9c3f50c9c544aead12e"
+      }
+    }
+  }
+}

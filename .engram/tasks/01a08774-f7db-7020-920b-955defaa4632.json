@@ -1,0 +1,53 @@
+{
+  "id": "01a08774-f7db-7020-920b-955defaa4632",
+  "external_ref": null,
+  "title": "Keep failed MCP initialization recoverable while preserving tool protocol errors",
+  "outcome": "Keep failed MCP initialization recoverable while preserving tool protocol errors",
+  "acceptance": [
+    "DispatchedRecoveryFailuresNeverReplayAndNextCallUsesAWorkingConnection(initialize-protocol-error) passes; initialization refusal is typed retryable and next call reconnects, unlike tool protocol errors which retain the live client."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "bug",
+  "priority": 1,
+  "labels": [
+    "agent-experience",
+    "daemon",
+    "mcp-contract",
+    "recovery",
+    "review"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "completed",
+  "parent_id": "01a0876f-d538-72f2-8dde-b2943b26315f",
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": {
+    "summary": "Initialization rejection remains typed/retryable and a subsequent call initializes a fresh connection; tool protocol rejection preserves exact code and current client. Intermediate correction RED1/4 then broad188/188 and full1756/0/2; verified by original reviewers6510/6511.",
+    "completed_at": "2026-09-09T18:59:36.817233800Z",
+    "actor": {
+      "actor_id": "greg/codex",
+      "actor_kind": "agent"
+    }
+  },
+  "activity": {
+    "central": {
+      "82d6defdb007a161351d08f91d8cfa0e9a69cf0873ca430861a1446cc4e9d1cc": {
+        "activity_id": "82d6defdb007a161351d08f91d8cfa0e9a69cf0873ca430861a1446cc4e9d1cc",
+        "task_id": "01a08774-f7db-7020-920b-955defaa4632",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "greg/codex",
+          "actor_kind": "agent"
+        },
+        "state": "finished",
+        "state_revision": 2,
+        "event_id": "4ac14584076951b4917900abf26f0d4c11b97b767cb13dffba7376407ebf3bce"
+      }
+    }
+  }
+}

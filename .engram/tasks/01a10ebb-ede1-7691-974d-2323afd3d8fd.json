@@ -1,0 +1,94 @@
+{
+  "id": "01a10ebb-ede1-7691-974d-2323afd3d8fd",
+  "external_ref": null,
+  "title": "Prepare and check test prerequisites before running the repository gates",
+  "outcome": "Prepare and check test prerequisites before running the repository gates",
+  "acceptance": [
+    "A standalone preparation script restores solution dependencies and netstandard2.0 fixture reference assemblies into the active NuGet cache.",
+    "The complete gate wrapper prepares and checks prerequisites before running format, build, tests, or external gates, and stops upfront on setup failure.",
+    "No infrastructure tests are added; existing solution and external contract gates pass."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "chore",
+  "priority": 2,
+  "labels": [
+    "architecture",
+    "csharp",
+    "fsharp",
+    "msbuild",
+    "review",
+    "semantic",
+    "semantic-correctness",
+    "testing"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "completed",
+  "parent_id": "01a10ea5-e74f-7e81-958e-51596dd37085",
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": {
+    "summary": "Delivered automatic PowerShell prerequisite preparation and complete gates, with matching AGENTS.md and CLAUDE.md instructions, in pushed commit 74ae7b25d18bd920d91e5fbbe3ec2432dec14d28.",
+    "completed_at": "2026-10-06T16:02:33.812635200Z",
+    "actor": {
+      "actor_id": "greg/codex",
+      "actor_kind": "agent"
+    }
+  },
+  "activity": {
+    "central": {
+      "2f560508d47b4848af31493f13b5d042": {
+        "activity_id": "2f560508d47b4848af31493f13b5d042",
+        "task_id": "01a10ebb-ede1-7691-974d-2323afd3d8fd",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "greg/codex",
+          "actor_kind": "agent"
+        },
+        "state": "started",
+        "state_revision": 1,
+        "event_id": "2f560508d47b4848af31493f13b5d042"
+      },
+      "4f24c46caadf4d328efc9541691096d4": {
+        "activity_id": "4f24c46caadf4d328efc9541691096d4",
+        "task_id": "01a10ebb-ede1-7691-974d-2323afd3d8fd",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "greg/codex",
+          "actor_kind": "agent"
+        },
+        "state": "finished",
+        "state_revision": 2,
+        "event_id": "82fbfadbe25148698a69c4c150147810"
+      },
+      "619ea753974c4169b8f68b4464033519": {
+        "activity_id": "619ea753974c4169b8f68b4464033519",
+        "task_id": "01a10ebb-ede1-7691-974d-2323afd3d8fd",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "greg/codex",
+          "actor_kind": "agent"
+        },
+        "state": "started",
+        "state_revision": 1,
+        "event_id": "619ea753974c4169b8f68b4464033519"
+      },
+      "be548f1cc44f48f6ba6422c8f9fb2174": {
+        "activity_id": "be548f1cc44f48f6ba6422c8f9fb2174",
+        "task_id": "01a10ebb-ede1-7691-974d-2323afd3d8fd",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "greg/codex",
+          "actor_kind": "agent"
+        },
+        "state": "started",
+        "state_revision": 1,
+        "event_id": "be548f1cc44f48f6ba6422c8f9fb2174"
+      }
+    }
+  }
+}

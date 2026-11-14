@@ -1,0 +1,54 @@
+{
+  "id": "01a087e8-d972-70f2-9fd6-9e3f0bc4dd6f",
+  "external_ref": null,
+  "title": "Document upstream condition limit for invariant proof",
+  "outcome": "Document upstream condition limit for invariant proof",
+  "acceptance": [
+    "Explain enforced upstream condition-character bound and shared expansion bound without changing any limit."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "task",
+  "priority": 3,
+  "labels": [
+    "architecture",
+    "csharp",
+    "fsharp",
+    "msbuild",
+    "review",
+    "semantic-correctness"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "completed",
+  "parent_id": "01a087c1-16bb-71d0-b87d-168e1dc3ce1e",
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": {
+    "summary": "Documented stricter upstream condition admission and distinct retained expansion bound without changing limits; original reviewer verified resolved.",
+    "completed_at": "2026-09-09T21:16:19.819450900Z",
+    "actor": {
+      "actor_id": "greg/codex",
+      "actor_kind": "agent"
+    }
+  },
+  "activity": {
+    "central": {
+      "a3e49189be06a49b43f6275da5aa50b6d8d142eeebc780c020fc0eb998d1fa0f": {
+        "activity_id": "a3e49189be06a49b43f6275da5aa50b6d8d142eeebc780c020fc0eb998d1fa0f",
+        "task_id": "01a087e8-d972-70f2-9fd6-9e3f0bc4dd6f",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "greg/codex",
+          "actor_kind": "agent"
+        },
+        "state": "finished",
+        "state_revision": 2,
+        "event_id": "c5b608f22055966cb41f8a687ea3747ed91875f49cdd88d5a3d8d8acc2c5867a"
+      }
+    }
+  }
+}

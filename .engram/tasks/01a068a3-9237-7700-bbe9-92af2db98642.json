@@ -1,0 +1,53 @@
+{
+  "id": "01a068a3-9237-7700-bbe9-92af2db98642",
+  "external_ref": null,
+  "title": "Make Phoenix CLI JSON output budget- and encoding-honest",
+  "outcome": "Every CLI-generated or pretty-printed JSON response uses Phoenix UTF-8 serialization and stays within the existing ordinary hard response budget with observable trimming.",
+  "acceptance": [
+    "Oversized multibyte CLI-generated errors stay at or below Json.HardBudgetBytes with explicit truncation evidence.",
+    "Pretty success output preserves literal non-ASCII text under UnsafeRelaxedJsonEscaping without exceeding the hard budget."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "bug",
+  "priority": 1,
+  "labels": [
+    "agent-experience",
+    "cli",
+    "mcp-contract",
+    "review"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "completed",
+  "parent_id": "01a06819-d56e-7e42-99e2-d6c75600a4c8",
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": {
+    "summary": "Delivered in commit eee9ee5 as part of the reviewed Phoenix CLI changeset.",
+    "completed_at": "2026-09-03T21:34:21.870811100Z",
+    "actor": {
+      "actor_id": "termal",
+      "actor_kind": "agent"
+    }
+  },
+  "activity": {
+    "central": {
+      "e8373b740692814ac4a957a00953173d15d6f42f0a36b4e191265346a5653048": {
+        "activity_id": "e8373b740692814ac4a957a00953173d15d6f42f0a36b4e191265346a5653048",
+        "task_id": "01a068a3-9237-7700-bbe9-92af2db98642",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "termal",
+          "actor_kind": "agent"
+        },
+        "state": "finished",
+        "state_revision": 2,
+        "event_id": "b058eb2325521dbe535a7e97d43b2f94a5d3856c6bb2cd0070c11117acf80967"
+      }
+    }
+  }
+}

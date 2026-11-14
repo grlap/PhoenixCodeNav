@@ -1,0 +1,32 @@
+{
+  "id": "01a074e7-5c47-7b22-8f6c-a497d03bcc8b",
+  "external_ref": null,
+  "title": "Narrow F# constructor and property caller discovery below whole-project symbol-use scans",
+  "outcome": "Bound constructor and property caller discovery without changing compiler-semantic completeness.",
+  "acceptance": [
+    "Constructor and property callers avoid one GetAllUsesOfAllSymbols materialization per closure project where targeted FCS evidence is available",
+    "Existing constructor and property caller regressions remain exact",
+    "Representative large-workspace evidence demonstrates bounded per-dependent cost without introducing a new scan or result limit"
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "task",
+  "priority": 2,
+  "labels": [
+    "fsharp",
+    "mcp-contract",
+    "performance",
+    "review",
+    "semantic"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "open",
+  "parent_id": "01a063dd-580b-7480-8d28-895853574bf6",
+  "child_requirement": "optional",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": null
+}

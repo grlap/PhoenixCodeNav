@@ -1,0 +1,53 @@
+{
+  "id": "01a08929-c6d4-7091-a4f1-b4a0268e5714",
+  "external_ref": null,
+  "title": "Pin exact confidence for item property-read relaxation through the public tool",
+  "outcome": "Pin exact confidence for item property-read relaxation through the public tool",
+  "acceptance": [
+    "A public symbol_at response on a project with a live item and unrelated later property assignment resolves the symbol with exact confidence and no newly introduced partial reason; indexed import-assumption control remains."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "task",
+  "priority": 3,
+  "labels": [
+    "fsharp",
+    "msbuild",
+    "review",
+    "semantic-correctness",
+    "testing"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "completed",
+  "parent_id": "01a088ef-a787-7fe1-9ea2-14952bbf776b",
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": {
+    "summary": "Both original reviewers verify real symbol_at baseline/late-unrelated-write comparison: same symbol, exact confidence, identical entire partialReason; indexed import-assumption control retained.",
+    "completed_at": "2026-09-10T02:59:48.237972Z",
+    "actor": {
+      "actor_id": "greg/codex",
+      "actor_kind": "agent"
+    }
+  },
+  "activity": {
+    "central": {
+      "7f3788b1d79e758eb0d5e4d53441457348ece57a4470b4e97872f73be91dedae": {
+        "activity_id": "7f3788b1d79e758eb0d5e4d53441457348ece57a4470b4e97872f73be91dedae",
+        "task_id": "01a08929-c6d4-7091-a4f1-b4a0268e5714",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "greg/codex",
+          "actor_kind": "agent"
+        },
+        "state": "finished",
+        "state_revision": 2,
+        "event_id": "5d77a027bc6c16b20a76f553089d5d6de97b2fc47b8e4fcf02b39e9ac0e033a7"
+      }
+    }
+  }
+}

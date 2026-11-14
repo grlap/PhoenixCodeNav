@@ -1,0 +1,47 @@
+{
+  "id": "01a06999-065c-7ef3-97f9-6bc6a6d1436d",
+  "external_ref": null,
+  "title": "Typed retry contract for first-call index_unavailable and cluster_cold_load (MCP and CLI): retryRecommended/retryHint plus server_capabilities progress",
+  "outcome": "Owner ruling 2026-09-03 (Greg): the cold-start first-call refusal is expected behavior and works as designed; this item only makes the retry contract explicit and typed for agents on both the MCP and CLI surfaces. Filed from Phoenix::Fable finding #55 in the CLI review cycle.",
+  "acceptance": [
+    "First-call index_unavailable and cluster_cold_load payloads carry retryRecommended:true, a retryHint naming server_capabilities.index.progress, and the same guidance in docs/agent-instructions.md; a product-boundary test proves the fields on a cold start; no new limits, no auto-retry"
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "task",
+  "priority": 2,
+  "labels": [],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "completed",
+  "parent_id": "01a063dd-5c87-7403-9486-fddc946bf93b",
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": {
+    "summary": "Shipped typed retryRecommended/retryHint contracts for index and semantic cold-start failures across MCP/CLI surfaces, honest follower-aware availability classification, bounded context_pack fallback, synchronized guidance, feature manifest entry, version bump, and decisive regressions.",
+    "completed_at": "2026-09-04T05:10:18.209440500Z",
+    "actor": {
+      "actor_id": "termal",
+      "actor_kind": "agent"
+    }
+  },
+  "activity": {
+    "central": {
+      "5b8c130f18217e3a1895f4094ac6876255d27e3c4e20e0b15997d1ae5fe1b76c": {
+        "activity_id": "5b8c130f18217e3a1895f4094ac6876255d27e3c4e20e0b15997d1ae5fe1b76c",
+        "task_id": "01a06999-065c-7ef3-97f9-6bc6a6d1436d",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "termal",
+          "actor_kind": "agent"
+        },
+        "state": "finished",
+        "state_revision": 2,
+        "event_id": "9e3348b309836736d82236a8e88ced1f5f7d52ae78fd1de972e6d2531c66695c"
+      }
+    }
+  }
+}

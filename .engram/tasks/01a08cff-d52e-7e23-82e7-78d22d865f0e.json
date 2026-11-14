@@ -1,0 +1,50 @@
+{
+  "id": "01a08cff-d52e-7e23-82e7-78d22d865f0e",
+  "external_ref": null,
+  "title": "Restore the website language-boundaries README fragment",
+  "outcome": "Restore the website language-boundaries README fragment",
+  "acceptance": [
+    "The website language-boundaries link resolves to the intended README section via compatibility anchor or corrected fragment."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "task",
+  "priority": 3,
+  "labels": [
+    "documentation",
+    "review"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "completed",
+  "parent_id": null,
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": {
+    "summary": "Restored why-not-just-grep compatibility anchor immediately before README Language and model limits; existing website and inbound URLs remain valid.",
+    "completed_at": "2026-09-10T20:27:14.721794400Z",
+    "actor": {
+      "actor_id": "greg/codex",
+      "actor_kind": "agent"
+    }
+  },
+  "activity": {
+    "central": {
+      "09f9bd9fbe7c55688bea8f91747d120b8bf9b4d36b7498742214ba49d29f584c": {
+        "activity_id": "09f9bd9fbe7c55688bea8f91747d120b8bf9b4d36b7498742214ba49d29f584c",
+        "task_id": "01a08cff-d52e-7e23-82e7-78d22d865f0e",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "greg/codex",
+          "actor_kind": "agent"
+        },
+        "state": "finished",
+        "state_revision": 2,
+        "event_id": "01b11d2ef78313e7b8d0ee5bfd83c6591afc9bb5b389f94e5a9bd5b7ff986d35"
+      }
+    }
+  }
+}

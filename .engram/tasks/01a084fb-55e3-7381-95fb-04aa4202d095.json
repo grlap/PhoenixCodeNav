@@ -1,0 +1,28 @@
+{
+  "id": "01a084fb-55e3-7381-95fb-04aa4202d095",
+  "external_ref": null,
+  "title": "Distinguish consumed F# analysis defaults from unused defaults",
+  "outcome": "Distinguish consumed F# analysis defaults from unused defaults",
+  "acceptance": [
+    "Keep starting-context disclosure and either distinguish consumed/suppressed defaults with tested telemetry, or explicitly document that the token cannot detect suppressed repository defaults."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "task",
+  "priority": 2,
+  "labels": [
+    "fsharp",
+    "review",
+    "semantic-correctness"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "open",
+  "parent_id": "01a084da-3f35-7b71-942e-9b0449437a74",
+  "child_requirement": "optional",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": null
+}

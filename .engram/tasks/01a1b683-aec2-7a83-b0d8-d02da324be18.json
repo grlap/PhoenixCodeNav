@@ -1,0 +1,46 @@
+{
+  "id": "01a1b683-aec2-7a83-b0d8-d02da324be18",
+  "external_ref": null,
+  "title": "Windows: credited declared WatcherTests on TermAl 30ddf016 / Engram fc749042",
+  "outcome": "Capture one actual credited declared dotnet test on the installed restarted Windows host from a fresh clean named Phoenix worktree, preserving exact command order, TRX and host verification evidence.",
+  "acceptance": [
+    "Prepare a fresh detached ignored target worktree at5786218163fb0ec3e9a7dba3786c9b2cc417f255, restore prerequisites without running tests, confirm clean status and allowed_modes=[], and name its source root before the run turn.",
+    "On exact topic C1-RUN-FIRST phoenix-windows execute the chosen TOML WatcherTests command as FIRST tool activity exactly once from its declared cwd; preserve native exit, counts, artifact hash, console size and verbatim host lines.",
+    "Inspect the run's actual notes/gates for verification and complete only as permitted by current project policy, reporting any credit refusal honestly."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "research",
+  "priority": 1,
+  "labels": [
+    "eo",
+    "runner-compatibility",
+    "windows"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "open",
+  "parent_id": null,
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": null,
+  "activity": {
+    "central": {
+      "2d844330be9742ebae175fb992c2383c": {
+        "activity_id": "2d844330be9742ebae175fb992c2383c",
+        "task_id": "01a1b683-aec2-7a83-b0d8-d02da324be18",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "greg/codex",
+          "actor_kind": "agent"
+        },
+        "state": "started",
+        "state_revision": 1,
+        "event_id": "2d844330be9742ebae175fb992c2383c"
+      }
+    }
+  }
+}

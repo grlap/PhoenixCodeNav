@@ -1,0 +1,50 @@
+{
+  "id": "01a0729f-c285-7cd1-ad31-9afbd1a14314",
+  "external_ref": null,
+  "title": "Simplify the website, clarify CLI access, and restyle the black hole",
+  "outcome": "A concise landing page with a tilted luminous black hole inspired by the user's reference and clear, accurate MCP/CLI access in the website and root README.",
+  "acceptance": [
+    "Focused website and CLI documentation validation passes across desktop/mobile; existing unrelated changes are preserved; no commit or push.",
+    "Hero uses a tilted pink/gold accretion disk with cyan jet inspired by the supplied reference, with accessible reduced-motion and pause behavior.",
+    "Landing page is materially simpler, with technical detail still reachable and capability/privacy limitations preserved.",
+    "Root README foregrounds verified CLI support with examples matching the implementation."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "task",
+  "priority": 1,
+  "labels": [],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "completed",
+  "parent_id": null,
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": {
+    "summary": "Promoted existing CLI support in README and landing page, simplified default content, and restyled hero as a tilted pink/gold black hole with cyan jets.",
+    "completed_at": "2026-09-05T17:54:05.101422900Z",
+    "actor": {
+      "actor_id": "greg/codex",
+      "actor_kind": "agent"
+    }
+  },
+  "activity": {
+    "central": {
+      "c503759f75e149233a4e687000c8e2b46637b3670a831ba04ccd5b9957487b75": {
+        "activity_id": "c503759f75e149233a4e687000c8e2b46637b3670a831ba04ccd5b9957487b75",
+        "task_id": "01a0729f-c285-7cd1-ad31-9afbd1a14314",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "greg/codex",
+          "actor_kind": "agent"
+        },
+        "state": "finished",
+        "state_revision": 2,
+        "event_id": "3e9c4eb6d2054eeb7c5c9468ab4be3450c6583ce8e5fe3f7b2593eeb05e67f81"
+      }
+    }
+  }
+}

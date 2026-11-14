@@ -1,0 +1,43 @@
+{
+  "id": "01a063dd-8047-7952-849d-f82f5d8551c6",
+  "external_ref": null,
+  "title": "Report destination claim state in Batch45 readiness failures",
+  "outcome": "Batch45 compound readiness assertions explain whether queryability or destination-claim publication timed out.",
+  "acceptance": [
+    "Both compound writer-readiness assertions include the observed IndexDestinationClaim state and health error in their failure message."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "task",
+  "priority": 3,
+  "labels": [
+    "review",
+    "testing"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "open",
+  "parent_id": "01a063dd-7b2f-78e2-b2cc-385fd932b308",
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": null,
+  "activity": {
+    "central": {
+      "ed874fb325a1f6ee0e84df44d20c6688787bd0282463cacbb6618df24b19f446": {
+        "activity_id": "ed874fb325a1f6ee0e84df44d20c6688787bd0282463cacbb6618df24b19f446",
+        "task_id": "01a063dd-8047-7952-849d-f82f5d8551c6",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "fable",
+          "actor_kind": "agent"
+        },
+        "state": "released",
+        "state_revision": 2,
+        "event_id": "e9a215bf20367a7c1ac5b269bbdc077c863c32d2a9ef1f5948ea8d15639999cf"
+      }
+    }
+  }
+}

@@ -1,0 +1,27 @@
+{
+  "id": "01a073cf-756c-7ee0-b4f1-32a0cfde76f9",
+  "external_ref": null,
+  "title": "Preserve test and generated filter disclosure in partial F# reference summaries",
+  "outcome": "Both exact and lower-bound F# reference summaries state when test projects or generated files were excluded.",
+  "acceptance": [
+    "A partial/lower-bound response with includeTests=false or includeGenerated=false includes the same explicit exclusion sentence as a workspace-complete response, while groups and excludedByReason remain consistent."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "task",
+  "priority": 3,
+  "labels": [
+    "mcp-contract",
+    "review"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "open",
+  "parent_id": null,
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": null
+}

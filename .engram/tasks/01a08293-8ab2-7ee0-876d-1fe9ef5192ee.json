@@ -1,0 +1,62 @@
+{
+  "id": "01a08293-8ab2-7ee0-876d-1fe9ef5192ee",
+  "external_ref": null,
+  "title": "Unify bounded MSBuild semantic evaluation for C# and F#",
+  "outcome": "A single bounded MSBuild semantic evaluation core is generalized from the F# implementation and then adopted deliberately by C# semantics without changing conservative index ownership.",
+  "acceptance": [
+    "C# and F# semantic paths consume the shared evaluated model without changing the conservative compile-ownership parser.",
+    "One shared bounded evaluator owns property expansion, imports, conditions, Choose, reserved project/current-document directories, and the declared safe function allowlist.",
+    "Parity tests prove shared props and conditions select equivalent compiler-affecting facts for C# and F#.",
+    "Release build, complete tests, external MCP gate, website verification, and one dual review round pass.",
+    "The shared evaluator supports the required TargetFramework.StartsWith condition and workspace-contained indexed Exists paths while unsupported functions and paths outside the workspace fail closed."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "epic",
+  "priority": 1,
+  "labels": [
+    "architecture",
+    "csharp",
+    "fsharp",
+    "msbuild",
+    "semantic"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "open",
+  "parent_id": "01a063dd-5401-7f73-a63d-bea317b25710",
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": null,
+  "activity": {
+    "central": {
+      "634ddb9a238eeac9d2b5b596d4f4bea1455ff1fdf7bcf95aa833fd2bbbe27d33": {
+        "activity_id": "634ddb9a238eeac9d2b5b596d4f4bea1455ff1fdf7bcf95aa833fd2bbbe27d33",
+        "task_id": "01a08293-8ab2-7ee0-876d-1fe9ef5192ee",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "greg/codex",
+          "actor_kind": "agent"
+        },
+        "state": "started",
+        "state_revision": 1,
+        "event_id": "634ddb9a238eeac9d2b5b596d4f4bea1455ff1fdf7bcf95aa833fd2bbbe27d33"
+      },
+      "9bef79501fbecabbb5a5393a4ecb6324c53e1978b731ee9ea7e88b9dcd66c358": {
+        "activity_id": "9bef79501fbecabbb5a5393a4ecb6324c53e1978b731ee9ea7e88b9dcd66c358",
+        "task_id": "01a08293-8ab2-7ee0-876d-1fe9ef5192ee",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "greg/codex",
+          "actor_kind": "agent"
+        },
+        "state": "released",
+        "state_revision": 2,
+        "event_id": "8842c94821f8ad60e63ea2cc3c8a255392e2e4c834366e21ae4f5e482b3586f8"
+      }
+    }
+  }
+}

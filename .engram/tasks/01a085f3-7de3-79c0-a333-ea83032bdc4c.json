@@ -1,0 +1,30 @@
+{
+  "id": "01a085f3-7de3-79c0-a333-ea83032bdc4c",
+  "external_ref": null,
+  "title": "Require positional item expansion for item-list-owning package callers",
+  "outcome": "Require positional item expansion for item-list-owning package callers",
+  "acceptance": [
+    "A new F# package Add call cannot accidentally omit positional helper expansion and silently use final helper state."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "task",
+  "priority": 3,
+  "labels": [
+    "architecture",
+    "csharp",
+    "fsharp",
+    "review",
+    "semantic-correctness"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "open",
+  "parent_id": null,
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": null
+}

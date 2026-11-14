@@ -1,0 +1,40 @@
+{
+  "id": "01a063dd-68b0-7c82-a19d-28a829ca66c4",
+  "external_ref": null,
+  "title": "Build an immutable synthetic functional-index test suite",
+  "outcome": "Build an immutable synthetic functional-index test suite",
+  "acceptance": [
+    "Build an immutable synthetic functional-index test suite is done"
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "task",
+  "priority": 1,
+  "labels": [],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "open",
+  "parent_id": null,
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": null,
+  "activity": {
+    "central": {
+      "29d90bd3747e82105277fc1c7291395bcbceaf54de97742b3fcd11e1ccb74e65": {
+        "activity_id": "29d90bd3747e82105277fc1c7291395bcbceaf54de97742b3fcd11e1ccb74e65",
+        "task_id": "01a063dd-68b0-7c82-a19d-28a829ca66c4",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "fable",
+          "actor_kind": "agent"
+        },
+        "state": "released",
+        "state_revision": 2,
+        "event_id": "145f9d4ced435335df57c8d993ce1a5238c48ddcece2f7ba1981221f76eb3418"
+      }
+    }
+  }
+}

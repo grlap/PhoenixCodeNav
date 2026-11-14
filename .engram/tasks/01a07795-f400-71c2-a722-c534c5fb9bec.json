@@ -1,0 +1,53 @@
+{
+  "id": "01a07795-f400-71c2-a722-c534c5fb9bec",
+  "external_ref": null,
+  "title": "Split NavigationTools.cs by concern",
+  "outcome": "Split NavigationTools.cs by concern",
+  "acceptance": [
+    "NavigationTools.cs is split into concern-focused partial files without changing the MCP surface or behavior; full gates and dual review pass"
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "task",
+  "priority": 2,
+  "labels": [
+    "agent-experience",
+    "architecture",
+    "maintainability",
+    "mcp-contract",
+    "structure"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "completed",
+  "parent_id": "01a0748d-2331-79e0-a8a4-c57d709cd778",
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": {
+    "summary": "Split NavigationTools.cs into seven concern-focused partials with a pure, order-preserving move and committed locally as 3920bf0f40eadb76effd2caa1404c6b5a9c13ba9.",
+    "completed_at": "2026-09-06T19:51:50.441381900Z",
+    "actor": {
+      "actor_id": "greg/codex",
+      "actor_kind": "agent"
+    }
+  },
+  "activity": {
+    "central": {
+      "f9f9b5d2de38271a9b7259ac597983965a6dc240609cbb73277997c43a8e55d2": {
+        "activity_id": "f9f9b5d2de38271a9b7259ac597983965a6dc240609cbb73277997c43a8e55d2",
+        "task_id": "01a07795-f400-71c2-a722-c534c5fb9bec",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "greg/codex",
+          "actor_kind": "agent"
+        },
+        "state": "finished",
+        "state_revision": 2,
+        "event_id": "e5238e933aa4cf214a2cdb04eba1d6f855bd12213c8f1fb2176a24083a024e8e"
+      }
+    }
+  }
+}

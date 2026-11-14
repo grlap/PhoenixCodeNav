@@ -1,0 +1,29 @@
+{
+  "id": "01a07d60-9ff5-7fe1-a7fc-ebe0a81f284f",
+  "external_ref": null,
+  "title": "Make Batch45 child-process teardown proof bounded and decisive",
+  "outcome": "The Batch45 process-follower test uses only load-bearing process-completion assertions and cannot hang while draining redirected output.",
+  "acceptance": [
+    "The child stdout and stderr reader tasks are drained with an explicit bound before strict workspace deletion, with timeout and non-timeout faults reported honestly.",
+    "The redundant child.HasExited assertion is removed or moved behind an operation that can return without proving exit.",
+    "The teardown remains bounded if the standalone child ever begins spawning descendants that can inherit redirected pipe handles."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "task",
+  "priority": 3,
+  "labels": [
+    "review",
+    "testing"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "open",
+  "parent_id": null,
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": null
+}

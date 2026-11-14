@@ -1,0 +1,40 @@
+{
+  "id": "01a063dd-6e41-7b41-a74f-685a9d5a08be",
+  "external_ref": null,
+  "title": "Pin semantic planning attribution and conditional telemetry shapes",
+  "outcome": "Pin semantic planning attribution and conditional telemetry shapes",
+  "acceptance": [
+    "Pin semantic planning attribution and conditional telemetry shapes is done"
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "task",
+  "priority": 1,
+  "labels": [],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "open",
+  "parent_id": null,
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": null,
+  "activity": {
+    "central": {
+      "bf32485aa532277150e9f4fece3905404d19343223ff113d176c486a5e075eeb": {
+        "activity_id": "bf32485aa532277150e9f4fece3905404d19343223ff113d176c486a5e075eeb",
+        "task_id": "01a063dd-6e41-7b41-a74f-685a9d5a08be",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "fable",
+          "actor_kind": "agent"
+        },
+        "state": "released",
+        "state_revision": 2,
+        "event_id": "994ebe4c16185188c76d871857efe4007af17f5399c5d94d4e43aae3fe0a9fbc"
+      }
+    }
+  }
+}

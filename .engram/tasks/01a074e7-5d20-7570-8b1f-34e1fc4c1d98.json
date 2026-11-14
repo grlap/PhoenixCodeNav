@@ -1,0 +1,31 @@
+{
+  "id": "01a074e7-5d20-7570-8b1f-34e1fc4c1d98",
+  "external_ref": null,
+  "title": "Disclose filtered selected F# callee bodies in completeness metadata",
+  "outcome": "Ensure a selected body removed by includeTests/includeGenerated is not presented as an unqualified complete zero.",
+  "acceptance": [
+    "A filtered selected body exposes either coverage.complete false or an explicit coverage.filtered signal",
+    "Existing counted-scope filter behavior and no-new-limit policy are preserved",
+    "The zero-count summary remains explicit about the applied filter"
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "task",
+  "priority": 3,
+  "labels": [
+    "fsharp",
+    "mcp-contract",
+    "review",
+    "semantic"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "open",
+  "parent_id": "01a063dd-580b-7480-8d28-895853574bf6",
+  "child_requirement": "optional",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": null
+}

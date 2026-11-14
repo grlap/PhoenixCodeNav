@@ -1,0 +1,66 @@
+{
+  "id": "01a063dd-d9ab-7703-b1d4-eb11044511d7",
+  "external_ref": null,
+  "title": "Cover documentationCommentId envelope and negative paths",
+  "outcome": "Product tests decisively cover the new root identity echo and each non-compiler recovery path.",
+  "acceptance": [
+    "Tests cover no indexed seed, no C# owner, malformed retry template, and conditional absence where appropriate.",
+    "definition, references, and implementations tests assert the root-level documentationCommentId echo."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "task",
+  "priority": 2,
+  "labels": [
+    "agent-experience",
+    "mcp-contract",
+    "review",
+    "semantic",
+    "testing"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "completed",
+  "parent_id": "01a063dd-887c-7630-9f20-3e13e01e490b",
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": {
+    "summary": "Closed documentationCommentId envelope and negative-path coverage in fdcd442.",
+    "completed_at": "2026-09-04T17:07:26.525132400Z",
+    "actor": {
+      "actor_id": "greg/codex",
+      "actor_kind": "agent"
+    }
+  },
+  "activity": {
+    "central": {
+      "1bf83f2507f0e21253c7515da73ce1dff77c96a32b4167da45ca457d3d95f631": {
+        "activity_id": "1bf83f2507f0e21253c7515da73ce1dff77c96a32b4167da45ca457d3d95f631",
+        "task_id": "01a063dd-d9ab-7703-b1d4-eb11044511d7",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "greg/codex",
+          "actor_kind": "agent"
+        },
+        "state": "finished",
+        "state_revision": 2,
+        "event_id": "a587005a9d64a9071826b852a621ca5a43b8b1b1a06863011159137af413a327"
+      },
+      "7e3fc2754eaa0db9d6444e7f388ab7cf7a034bde15c939b1a6af9cd68ff34a57": {
+        "activity_id": "7e3fc2754eaa0db9d6444e7f388ab7cf7a034bde15c939b1a6af9cd68ff34a57",
+        "task_id": "01a063dd-d9ab-7703-b1d4-eb11044511d7",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "fable",
+          "actor_kind": "agent"
+        },
+        "state": "released",
+        "state_revision": 2,
+        "event_id": "116fe8b9348992f10496ee099be4e682d8e159b3e07579dc38c916602d441cab"
+      }
+    }
+  }
+}

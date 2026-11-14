@@ -1,0 +1,53 @@
+{
+  "id": "01a07795-f3b0-7591-af3e-5414391f3a97",
+  "external_ref": null,
+  "title": "Split FSharpSemanticStage2Tests by concern",
+  "outcome": "Split FSharpSemanticStage2Tests by concern",
+  "acceptance": [
+    "FSharpSemanticStage2Tests is split as one partial xUnit class across concern files without changing test identities, fixture wiring, collection semantics, method bodies, or behavior; full gates and dual review pass"
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "task",
+  "priority": 2,
+  "labels": [
+    "agent-experience",
+    "architecture",
+    "maintainability",
+    "structure",
+    "testing"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "completed",
+  "parent_id": "01a0748d-2331-79e0-a8a4-c57d709cd778",
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": {
+    "summary": "Committed packet 2 as 0b4643f35b2255c53f022c7849827edca2c335a1: pure concern-based split of FSharpSemanticStage2Tests into six new partials plus the shared shell. Exact move proofs preserved all 148 members and 252 enumerated test identities; full wrapper GREEN; fresh Codex/Claude dual review CLEAN/CLEAN with one deferred Low.",
+    "completed_at": "2026-09-06T17:35:49.086049300Z",
+    "actor": {
+      "actor_id": "greg/codex",
+      "actor_kind": "agent"
+    }
+  },
+  "activity": {
+    "central": {
+      "32189bba1b0bbdbcf7c0268de79cdcac2a7b84fffe8b0eda3430b32aee43e9d6": {
+        "activity_id": "32189bba1b0bbdbcf7c0268de79cdcac2a7b84fffe8b0eda3430b32aee43e9d6",
+        "task_id": "01a07795-f3b0-7591-af3e-5414391f3a97",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "greg/codex",
+          "actor_kind": "agent"
+        },
+        "state": "finished",
+        "state_revision": 2,
+        "event_id": "d53c9c84821fa4339cb03c28f68031ac553c739ae31d4b3082abf420fe9108f9"
+      }
+    }
+  }
+}

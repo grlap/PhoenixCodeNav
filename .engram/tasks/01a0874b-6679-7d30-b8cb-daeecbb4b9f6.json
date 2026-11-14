@@ -1,0 +1,53 @@
+{
+  "id": "01a0874b-6679-7d30-b8cb-daeecbb4b9f6",
+  "external_ref": null,
+  "title": "Forward cancellation across a recovered daemon session with explicit correlation",
+  "outcome": "Forward cancellation across a recovered daemon session with explicit correlation",
+  "acceptance": [
+    "RecoveryForwardsMetadataResultsProgressAndCancellationWithoutReplayingLostCall passes: a valid downstream cancelled notification cancels the upstream tool, preserves result and progress, and never replays a dispatched mutation."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "bug",
+  "priority": 1,
+  "labels": [
+    "agent-experience",
+    "daemon",
+    "mcp-contract",
+    "recovery",
+    "testing"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "completed",
+  "parent_id": "01a08735-5bf6-7463-a954-43e838d04c76",
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": {
+    "summary": "RecoveryForwardsMetadataResultsProgressAndCancellationWithoutReplayingLostCall passes: downstream cancellation explicitly forwarded with upstream string request identity; metadata/results/progress retained and dispatched mutation not replayed. Full1756/0/2 and same-session dual review CLEAN.",
+    "completed_at": "2026-09-09T18:59:37.096039700Z",
+    "actor": {
+      "actor_id": "greg/codex",
+      "actor_kind": "agent"
+    }
+  },
+  "activity": {
+    "central": {
+      "1a64e6205af3e0aeede575c8411a078acc3a7e3314fc5114d4b789379443cc6d": {
+        "activity_id": "1a64e6205af3e0aeede575c8411a078acc3a7e3314fc5114d4b789379443cc6d",
+        "task_id": "01a0874b-6679-7d30-b8cb-daeecbb4b9f6",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "greg/codex",
+          "actor_kind": "agent"
+        },
+        "state": "finished",
+        "state_revision": 2,
+        "event_id": "f4ccd35ea1c906f833ae89f20b75f8dd597901495d214a0fc64ba8ed86ae0e98"
+      }
+    }
+  }
+}

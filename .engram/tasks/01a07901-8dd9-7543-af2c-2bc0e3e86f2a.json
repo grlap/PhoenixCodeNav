@@ -1,0 +1,29 @@
+{
+  "id": "01a07901-8dd9-7543-af2c-2bc0e3e86f2a",
+  "external_ref": null,
+  "title": "Make the fresh-index lifecycle self-test relaunch correctly from a dotnet-tool pwsh shim",
+  "outcome": "Make the fresh-index lifecycle self-test relaunch correctly from a dotnet-tool pwsh shim",
+  "acceptance": [
+    "The self-test still launches the lease probe through the same PowerShell runtime and preserves its collision assertions",
+    "pwsh -NoProfile -File scripts/test-roslyn-mcp.ps1 -SelfTestFreshIndexLifecycleContract passes when pwsh is installed as a dotnet global tool whose current process executable is dotnet.exe"
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "bug",
+  "priority": 3,
+  "labels": [
+    "harness",
+    "powershell",
+    "testing"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "open",
+  "parent_id": null,
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": null
+}

@@ -1,0 +1,31 @@
+{
+  "id": "01a089f1-82a7-7ab3-8758-f762cfe55548",
+  "external_ref": null,
+  "title": "Give each simple-model input omission its own stable reason",
+  "outcome": "Give each simple-model input omission its own stable reason",
+  "acceptance": [
+    "Missing ProjectReference and missing HintPath DLL produce distinguishable reasons absent from a no-omission control."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "task",
+  "priority": 2,
+  "labels": [
+    "fsharp",
+    "mcp-contract",
+    "msbuild",
+    "pilot",
+    "project-model",
+    "review"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "open",
+  "parent_id": "01a089a5-604d-7a91-b551-f486866243fd",
+  "child_requirement": "optional",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": null
+}

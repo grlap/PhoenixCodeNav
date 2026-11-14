@@ -1,0 +1,29 @@
+{
+  "id": "01a07a97-519e-7f43-869d-c00df37fef79",
+  "external_ref": null,
+  "title": "Assert GitWatcher handle release with a decisive Git-repository deletion proof",
+  "outcome": "A Git-backed shutdown regression proves GitWatcher releases its handles rather than relying only on tolerant repository cleanup.",
+  "acceptance": [
+    "A Git-repository lifecycle test fails if GitWatcher retains handles on .git or .git/logs after shutdown",
+    "The asserted proof preserves tolerant cleanup for unrelated Git-tree residue"
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "task",
+  "priority": 3,
+  "labels": [
+    "index-freshness",
+    "review",
+    "testing"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "open",
+  "parent_id": null,
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": null
+}

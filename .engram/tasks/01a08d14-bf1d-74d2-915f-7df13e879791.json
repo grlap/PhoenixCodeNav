@@ -1,0 +1,50 @@
+{
+  "id": "01a08d14-bf1d-74d2-915f-7df13e879791",
+  "external_ref": null,
+  "title": "Document the website dependent beside the README compatibility anchor",
+  "outcome": "Future README edits can identify why the legacy fragment must remain.",
+  "acceptance": [
+    "The why-not-just-grep anchor has a concise comment naming the website dependency, with the current inbound URL still resolving to Language and model limits."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "task",
+  "priority": 3,
+  "labels": [
+    "documentation",
+    "review"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "completed",
+  "parent_id": null,
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": {
+    "summary": "Documented and verified the website's README compatibility-anchor dependency. Full gate and new dual review CLEAN; delivered in worktree, not yet committed/pushed.",
+    "completed_at": "2026-09-10T23:21:29.573677100Z",
+    "actor": {
+      "actor_id": "greg/codex",
+      "actor_kind": "agent"
+    }
+  },
+  "activity": {
+    "central": {
+      "ded792e8bc7352e705725dffae498cce5da81d6a0140faae5aef08e4430b9a43": {
+        "activity_id": "ded792e8bc7352e705725dffae498cce5da81d6a0140faae5aef08e4430b9a43",
+        "task_id": "01a08d14-bf1d-74d2-915f-7df13e879791",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "greg/codex",
+          "actor_kind": "agent"
+        },
+        "state": "finished",
+        "state_revision": 2,
+        "event_id": "062c90306fb5e5b943d5bd643aff203032bf59ed81863f4c4fb0e5d38a0ccd8c"
+      }
+    }
+  }
+}

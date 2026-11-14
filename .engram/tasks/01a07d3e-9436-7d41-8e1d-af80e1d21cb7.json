@@ -1,0 +1,27 @@
+{
+  "id": "01a07d3e-9436-7d41-8e1d-af80e1d21cb7",
+  "external_ref": null,
+  "title": "Remove the tautological reuse-helper process-exit assertion",
+  "outcome": "Portal launcher process-exit assertions are load-bearing and do not duplicate an immediately preceding successful WaitForExitAsync contract.",
+  "acceptance": [
+    "PortalLauncherRuntimeTests no longer asserts helper.HasExited immediately after WaitForExitAsync completes, or the assertion follows a helper that can return without proving exit."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "task",
+  "priority": 3,
+  "labels": [
+    "review",
+    "testing"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "open",
+  "parent_id": null,
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": null
+}

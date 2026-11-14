@@ -1,0 +1,64 @@
+{
+  "id": "01a089a5-604d-7a91-b551-f486866243fd",
+  "external_ref": null,
+  "title": "Pilot C#-like F# navigation without the strict MSBuild evaluator",
+  "outcome": "Provide an explicit simpler F# navigation trial reusing shared raw XML project parsing and indexed ordered source inputs, bypassing the extra import/condition evaluator while preserving the evaluated path for comparison and leaving C# unchanged. Measure navigation correctness and timing rather than claiming import evaluation was repaired.",
+  "acceptance": [
+    "Assert actual public navigation against independently expected declarations for legacy and SDK fixtures with irrelevant deployment imports. Include a compiler-input-bearing import counterexample that exposes missing coverage; do not describe ignored import effects as successful import resolution.",
+    "Bypass strict import/condition evaluation for F# navigation capture and dependent discovery in the simpler model. Preserve the existing index-time Exists capture so switching semantic models cannot invalidate persisted strict-mode facts; clearly disclose this pilot does not remove index-time evaluation.",
+    "Exercise direct references, source membership, defines, repeated queries/dependent discovery and switching back to evaluated mode. Record focused timing evidence with diagnostic logging off, without making unmeasured whole-workspace performance claims.",
+    "Keep this pilot a separate changeset after diagnostics13715be; expose an explicit selectable simpler F# navigation model and retain the evaluated model. Leave C# parsing and semantic composition unchanged.",
+    "Reuse shared raw XML parsing and existing F# parsing options. Preserve document-ordered literal Compile inputs, with a separate at-least-three-file order-sensitive regression, and expose omitted/approximated imported, conditioned or unresolved inputs through a model-specific partial reason and indexed confidence.",
+    "Run focused and full quality gates and the required dual review. Keep the actual monolith trial pending until Greg supplies or runs its inputs; no automatic commit/push."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "task",
+  "priority": 2,
+  "labels": [
+    "fsharp",
+    "msbuild",
+    "pilot",
+    "project-model"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "open",
+  "parent_id": "01a063dd-5401-7f73-a63d-bea317b25710",
+  "child_requirement": "required",
+  "prerequisites": [
+    "01a08976-b0f6-7c30-a489-74bbf23b3ba8"
+  ],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": null,
+  "activity": {
+    "central": {
+      "97271320ca6e87f8ef29eb847d100542f8ab8a1e041c0216c4e995a979b4d847": {
+        "activity_id": "97271320ca6e87f8ef29eb847d100542f8ab8a1e041c0216c4e995a979b4d847",
+        "task_id": "01a089a5-604d-7a91-b551-f486866243fd",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "greg/codex",
+          "actor_kind": "agent"
+        },
+        "state": "started",
+        "state_revision": 1,
+        "event_id": "97271320ca6e87f8ef29eb847d100542f8ab8a1e041c0216c4e995a979b4d847"
+      },
+      "bb26a1bc0449501cbed73de7c110fb9723ae5f8b13310a48d7ee8dc58943d6d9": {
+        "activity_id": "bb26a1bc0449501cbed73de7c110fb9723ae5f8b13310a48d7ee8dc58943d6d9",
+        "task_id": "01a089a5-604d-7a91-b551-f486866243fd",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "greg/codex",
+          "actor_kind": "agent"
+        },
+        "state": "started",
+        "state_revision": 1,
+        "event_id": "bb26a1bc0449501cbed73de7c110fb9723ae5f8b13310a48d7ee8dc58943d6d9"
+      }
+    }
+  }
+}

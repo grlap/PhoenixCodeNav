@@ -1,0 +1,55 @@
+{
+  "id": "01a089f1-826f-7bf3-bfa7-09c1a47a4691",
+  "external_ref": null,
+  "title": "Simple F# model must not claim proven workspace completeness",
+  "outcome": "Simple F# model must not claim proven workspace completeness",
+  "acceptance": [
+    "Evaluated-mode completeness output is unchanged; both original reviewers verify the corrected High.",
+    "Public simple references, callers and implementations for an imported-only consumer cannot claim workspaceComplete or proven real-workspace counts; approximate counts are explicitly scoped and are not blanket-labelled lower bounds."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "bug",
+  "priority": 1,
+  "labels": [
+    "fsharp",
+    "mcp-contract",
+    "msbuild",
+    "pilot",
+    "project-model",
+    "review"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "completed",
+  "parent_id": "01a089a5-604d-7a91-b551-f486866243fd",
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": {
+    "summary": "Reproduced and fixed simple-model false workspace completeness; both original reviewers verified the complete corrected 21-path union CLEAN with no Critical/High.",
+    "completed_at": "2026-09-10T06:50:05.905516100Z",
+    "actor": {
+      "actor_id": "greg/codex",
+      "actor_kind": "agent"
+    }
+  },
+  "activity": {
+    "central": {
+      "f8f518fb5832aeed980e2e7230fc4acc099538b71fa34f39209e7871640d641c": {
+        "activity_id": "f8f518fb5832aeed980e2e7230fc4acc099538b71fa34f39209e7871640d641c",
+        "task_id": "01a089f1-826f-7bf3-bfa7-09c1a47a4691",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "greg/codex",
+          "actor_kind": "agent"
+        },
+        "state": "finished",
+        "state_revision": 2,
+        "event_id": "4452ae60b2298e57cecb0ad6b2afe6b187f4f4e4ebcdb05e539ef0d58a575339"
+      }
+    }
+  }
+}

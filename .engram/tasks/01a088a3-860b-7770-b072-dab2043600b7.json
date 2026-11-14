@@ -1,0 +1,27 @@
+{
+  "id": "01a088a3-860b-7770-b072-dab2043600b7",
+  "external_ref": null,
+  "title": "Hoist the workspace root out of per-project F# semantic options evaluation",
+  "outcome": "Hoist the workspace root out of per-project F# semantic options evaluation",
+  "acceptance": [
+    "Suggested fix: read the workspace root once per operation (or memoize it on IndexQueries) and pass it into EvaluateFSharpSemanticOptions, mirroring the ColdStart hoist. Reproduction: Reasoned, not reproduced - confirming the added latency would require running the semantic suite, which reviewer mode forbids; the call-site nesting is established statically."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "bug",
+  "priority": 2,
+  "labels": [
+    "performance",
+    "review"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "open",
+  "parent_id": null,
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": null
+}

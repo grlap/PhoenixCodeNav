@@ -1,0 +1,51 @@
+{
+  "id": "01a07101-0875-77e1-b04d-8dcbedbcfe15",
+  "external_ref": null,
+  "title": "Cover Directory.Build ProjectReference semantic evaluation",
+  "outcome": "Cover Directory.Build ProjectReference semantic evaluation",
+  "acceptance": [
+    "A test pins Directory.Build.props or Directory.Build.targets ProjectReference evaluation and the capability summary describes that surface."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "task",
+  "priority": 3,
+  "labels": [
+    "fsharp",
+    "review",
+    "testing"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "completed",
+  "parent_id": "01a063dd-599c-7253-999b-3eff45080442",
+  "child_requirement": "optional",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": {
+    "summary": "Covered ProjectReference contribution from Directory.Build.targets and updated the directory-build feature summary.",
+    "completed_at": "2026-09-05T10:39:24.340770700Z",
+    "actor": {
+      "actor_id": "greg/codex",
+      "actor_kind": "agent"
+    }
+  },
+  "activity": {
+    "central": {
+      "57b1ca05275d7438983f81b09e469f95270bb8b2ab1b17ad4a1110364a35583e": {
+        "activity_id": "57b1ca05275d7438983f81b09e469f95270bb8b2ab1b17ad4a1110364a35583e",
+        "task_id": "01a07101-0875-77e1-b04d-8dcbedbcfe15",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "greg/codex",
+          "actor_kind": "agent"
+        },
+        "state": "finished",
+        "state_revision": 2,
+        "event_id": "4bd38aadf0443c90d72d35edefe4ad586728585071ff7856d1885e90f885f136"
+      }
+    }
+  }
+}

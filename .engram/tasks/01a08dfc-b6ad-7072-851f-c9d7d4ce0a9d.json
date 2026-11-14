@@ -1,0 +1,28 @@
+{
+  "id": "01a08dfc-b6ad-7072-851f-c9d7d4ce0a9d",
+  "external_ref": null,
+  "title": "Centralize orphan-eligible source policy shared by repo_overview and search_text",
+  "outcome": "Centralize orphan-eligible source policy shared by repo_overview and search_text",
+  "acceptance": [
+    "One Core-owned source eligibility rule governs both repo_overview.orphanedFiles and search_text orphaned annotation, with existing owned/orphaned/text-only regressions remaining green."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "task",
+  "priority": 3,
+  "labels": [
+    "architecture",
+    "review",
+    "search"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "superseded",
+  "parent_id": "01a063dd-634e-7851-87df-a923d68a92d1",
+  "child_requirement": "optional",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": "01a08e04-032c-7881-b764-01d40f03dd67",
+  "disposal_reason": "Continue as independent P3 follow-up after completion of w-a923d68a92d1. Preserve original Claude session-6565 review provenance in the existing creation note; detachment repairs parent-completed availability only, without implementing work or reopening the parent. Requested by Advisor #68.",
+  "completion": null
+}

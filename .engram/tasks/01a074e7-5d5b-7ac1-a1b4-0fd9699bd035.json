@@ -1,0 +1,30 @@
+{
+  "id": "01a074e7-5d5b-7ac1-a1b4-0fd9699bd035",
+  "external_ref": null,
+  "title": "Align shared F# call-boundary fields across callers and callees",
+  "outcome": "Give sibling F# call-graph operations one documented placement for quotation and trait exclusions.",
+  "acceptance": [
+    "Contract tests pin the chosen shape for both operations",
+    "quotationBodiesExcluded and traitCallsUnresolved use one JSON placement across callers and callees, or the capability contract explicitly documents the divergence"
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "task",
+  "priority": 3,
+  "labels": [
+    "fsharp",
+    "mcp-contract",
+    "review",
+    "semantic"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "open",
+  "parent_id": "01a063dd-580b-7480-8d28-895853574bf6",
+  "child_requirement": "optional",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": null
+}

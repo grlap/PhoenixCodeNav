@@ -1,0 +1,47 @@
+{
+  "id": "01a063dd-dda1-77b1-8ecd-9d0f39d180cb",
+  "external_ref": null,
+  "title": "Bound TryParseStringList input with owner-approved values",
+  "outcome": "List-like string parsing avoids unbounded materialization while preserving existing schemas and disclosed error behavior.",
+  "acceptance": [
+    "The repository owner explicitly approves any new byte/count bound before implementation.",
+    "kinds, usageKinds, and spans reject oversized input with bounded structured evidence and retain normal CSV/JSON parity."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "task",
+  "priority": 3,
+  "labels": [
+    "agent-experience",
+    "compatibility",
+    "mcp-contract",
+    "performance",
+    "review"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "open",
+  "parent_id": "01a063dd-86a6-70c1-b548-68f810d17b00",
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": null,
+  "activity": {
+    "central": {
+      "5809903274b70926549b553232cf70359264209b358131a88363103f10e78748": {
+        "activity_id": "5809903274b70926549b553232cf70359264209b358131a88363103f10e78748",
+        "task_id": "01a063dd-dda1-77b1-8ecd-9d0f39d180cb",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "fable",
+          "actor_kind": "agent"
+        },
+        "state": "released",
+        "state_revision": 2,
+        "event_id": "e066c7f2e71ae1cb495d107d3d871a5762569446cfe87af3e592502350992054"
+      }
+    }
+  }
+}

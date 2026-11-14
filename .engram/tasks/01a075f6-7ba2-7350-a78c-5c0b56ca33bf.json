@@ -1,0 +1,28 @@
+{
+  "id": "01a075f6-7ba2-7350-a78c-5c0b56ca33bf",
+  "external_ref": null,
+  "title": "Anchor website desktop type-scale checks to the desktop breakpoint",
+  "outcome": "The verifier's desktop typography assertion can only be satisfied by declarations inside the min-width:1021px breakpoint.",
+  "acceptance": [
+    "The hero lead, capability-grid, and access-card font-size conjuncts are scoped to @media (min-width: 1021px), or the check is renamed and rewritten to truthfully cover base sizes."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "task",
+  "priority": 3,
+  "labels": [
+    "review",
+    "testing",
+    "website"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "open",
+  "parent_id": null,
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": null
+}

@@ -1,0 +1,54 @@
+{
+  "id": "01a08737-d98f-79d0-8561-647172590308",
+  "external_ref": null,
+  "title": "Derive reserved MSBuildProjectExtension from the shared root project context",
+  "outcome": "Both language adapters derive MSBuildProjectExtension from the actual root project path before imports, independent of SDK and TFM, without using the current imported file extension.",
+  "acceptance": [
+    "A failing-before/passing-after regression evaluates the screenshot condition '$(MSBuildProjectExtension)' == '.fsproj' in the project body and early/imported props, including SDK-less projects.",
+    "C# and F# use one reserved-property rule from their real project path; later or imported assignments cannot silently replace this reserved property.",
+    "Cold/delta Exists capture converges under extension-dependent conditions; schema, capabilities, version, full gates and dual review reflect changed behavior."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "bug",
+  "priority": 1,
+  "labels": [
+    "csharp",
+    "fsharp",
+    "msbuild",
+    "semantic-correctness"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "completed",
+  "parent_id": null,
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": {
+    "summary": "Shared reserved MSBuildProjectExtension derives from the real root project path before early imports for C# and F#, independent of SDK or TFM. Reserved assignments refuse; import-stable context and cold/delta Exists recapture covered. Version 0.12.100, schema 38; decisive RED/GREEN, full gates and original dual verification complete.",
+    "completed_at": "2026-09-09T19:03:16.502444900Z",
+    "actor": {
+      "actor_id": "greg/codex",
+      "actor_kind": "agent"
+    }
+  },
+  "activity": {
+    "central": {
+      "11d3eaeb2abb535a45eeb94abd7afdb9e630f763325017ec6726b841d4a02367": {
+        "activity_id": "11d3eaeb2abb535a45eeb94abd7afdb9e630f763325017ec6726b841d4a02367",
+        "task_id": "01a08737-d98f-79d0-8561-647172590308",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "greg/codex",
+          "actor_kind": "agent"
+        },
+        "state": "finished",
+        "state_revision": 2,
+        "event_id": "b3d7bf33e3702cc53a35f589e28d0d5005d3e2d91857544aacd08ffb908cf11f"
+      }
+    }
+  }
+}

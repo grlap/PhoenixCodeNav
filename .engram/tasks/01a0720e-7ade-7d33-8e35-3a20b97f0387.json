@@ -1,0 +1,30 @@
+{
+  "id": "01a0720e-7ade-7d33-8e35-3a20b97f0387",
+  "external_ref": null,
+  "title": "Clarify bounded F# TFM selection and root-context failure details",
+  "outcome": "Failure prose distinguishes Phoenix's netstandard-only compatibility policy from Microsoft table incompatibility and distinguishes root-context mismatches from child selection.",
+  "acceptance": [
+    "A non-netstandard child is described as outside Phoenix's bounded policy.",
+    "A root-context mismatch is not rendered as a referenced-project/child-TFM failure."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "task",
+  "priority": 3,
+  "labels": [
+    "fsharp",
+    "mcp-contract",
+    "review",
+    "semantic"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "open",
+  "parent_id": "01a070c5-95e1-7482-8cd1-326c967e5cb4",
+  "child_requirement": "optional",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": null
+}

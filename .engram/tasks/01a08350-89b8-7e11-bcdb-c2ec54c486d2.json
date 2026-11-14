@@ -1,0 +1,59 @@
+{
+  "id": "01a08350-89b8-7e11-bcdb-c2ec54c486d2",
+  "external_ref": null,
+  "title": "Pin bounded StartsWith fail-closed and scalar contract shapes",
+  "outcome": "Regression coverage pins unresolved receivers, exact False text, double-quoted literals, and rejection of chained property functions.",
+  "acceptance": [
+    "Chained StartsWith is rejected with fsharp_semantic_property_function_unsupported.",
+    "Double-quoted literals work.",
+    "False scalar expansion is exactly False.",
+    "Undefined.StartsWith fails with fsharp_semantic_condition_property_unresolved and cannot define the guarded constant."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "task",
+  "priority": 2,
+  "labels": [
+    "architecture",
+    "csharp",
+    "fsharp",
+    "msbuild",
+    "review",
+    "semantic",
+    "semantic-correctness",
+    "testing"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "completed",
+  "parent_id": "01a08337-0a68-7cf1-bd32-0478506fde2c",
+  "child_requirement": "optional",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": {
+    "summary": "Tests pin unresolved fail-closed behavior, exact True/False scalars, double quotes, chained-call rejection, dependency order, and escaping.",
+    "completed_at": "2026-09-08T23:48:42.670855Z",
+    "actor": {
+      "actor_id": "greg/codex",
+      "actor_kind": "agent"
+    }
+  },
+  "activity": {
+    "central": {
+      "145e9926bd2420af840a0759b15e24f112b45a99f49f9f3be35f15288efa8e24": {
+        "activity_id": "145e9926bd2420af840a0759b15e24f112b45a99f49f9f3be35f15288efa8e24",
+        "task_id": "01a08350-89b8-7e11-bcdb-c2ec54c486d2",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "greg/codex",
+          "actor_kind": "agent"
+        },
+        "state": "finished",
+        "state_revision": 2,
+        "event_id": "ae0f452ab6fac5bf478c85efea2a7143bc64ba6e8db3c8a5a7b42cf4bcee1321"
+      }
+    }
+  }
+}

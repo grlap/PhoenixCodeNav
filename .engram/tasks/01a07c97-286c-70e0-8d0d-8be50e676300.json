@@ -1,0 +1,30 @@
+{
+  "id": "01a07c97-286c-70e0-8d0d-8be50e676300",
+  "external_ref": null,
+  "title": "Clarify or unify daemon listener disposal semantics for pending accepts",
+  "outcome": "Make IDaemonTransportListener disposal semantics consistent or explicit for in-flight accepts",
+  "acceptance": [
+    "Callers cannot reasonably infer that Windows listener disposal alone stops a pending accept",
+    "IDaemonTransportListener documents whether DisposeAsync releases in-flight AcceptAsync operations on every platform, or WindowsDaemonTransportListener implements equivalent release behavior"
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "task",
+  "priority": 2,
+  "labels": [
+    "architecture",
+    "daemon",
+    "performance",
+    "review"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "open",
+  "parent_id": null,
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": null
+}

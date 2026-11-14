@@ -1,0 +1,46 @@
+{
+  "id": "01a0748d-2331-79e0-a8a4-c57d709cd778",
+  "external_ref": null,
+  "title": "Split oversized files by concern",
+  "outcome": "Oversized production and test files are split along cohesive concern boundaries without behavior changes, reducing context cost, grep density, review-diff size, and merge friction.",
+  "acceptance": [
+    "A Greg-approved split map uses existing partial-class/module patterns and preserves public and internal behavior.",
+    "High-contention files have stable ownership boundaries suitable for concurrent agent work.",
+    "Pure-move slices pass the full repository gates and receive an adversarial review that includes moved-code inspection."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "task",
+  "priority": 1,
+  "labels": [
+    "agent-experience",
+    "architecture",
+    "maintainability"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "open",
+  "parent_id": null,
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": null,
+  "activity": {
+    "central": {
+      "b8426e4dce4cc4a1db6065667f61678f0787b98862720197f6f030ecbb7f0546": {
+        "activity_id": "b8426e4dce4cc4a1db6065667f61678f0787b98862720197f6f030ecbb7f0546",
+        "task_id": "01a0748d-2331-79e0-a8a4-c57d709cd778",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "greg/codex",
+          "actor_kind": "agent"
+        },
+        "state": "started",
+        "state_revision": 1,
+        "event_id": "b8426e4dce4cc4a1db6065667f61678f0787b98862720197f6f030ecbb7f0546"
+      }
+    }
+  }
+}

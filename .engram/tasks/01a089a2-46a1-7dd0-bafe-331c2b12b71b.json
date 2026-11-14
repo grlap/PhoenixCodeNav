@@ -1,0 +1,30 @@
+{
+  "id": "01a089a2-46a1-7dd0-bafe-331c2b12b71b",
+  "external_ref": null,
+  "title": "Carry import identity and span on inner MSBuild diagnostic records",
+  "outcome": "Carry import identity and span on inner MSBuild diagnostic records",
+  "acceptance": [
+    "A product regression with two same-condition imports in one document asserts their distinct identities/spans, including nested import correlation and the skipped second import.",
+    "Every per-import diagnostic record includes the enclosing import span and raw import identity, with consistent identity fields on both skipped-record branches."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "bug",
+  "priority": 3,
+  "labels": [
+    "diagnostics",
+    "msbuild",
+    "observability",
+    "review"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "open",
+  "parent_id": "01a08976-b0f6-7c30-a489-74bbf23b3ba8",
+  "child_requirement": "optional",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": null
+}

@@ -1,0 +1,47 @@
+{
+  "id": "01a085cf-1306-7791-8de8-9c84a4478d67",
+  "external_ref": null,
+  "title": "Trim C# declared package IDs before fallback projection",
+  "outcome": "Trim C# declared package IDs before fallback projection",
+  "acceptance": [
+    "ParseSnapshot-produced PackageRefs fed to EvaluateCSharpPackageReferencesSnapshot return no package after Include then Remove, for both padded and plain Include identities."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "bug",
+  "priority": 3,
+  "labels": [
+    "architecture",
+    "csharp",
+    "fsharp",
+    "review",
+    "semantic-correctness",
+    "shared-packages"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "superseded",
+  "parent_id": "01a0850a-f735-72e3-9ad0-7dcd34f3b95a",
+  "child_requirement": "optional",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": "01a085f3-7dc9-7723-8e64-c4fcff6d6bf8",
+  "disposal_reason": "Continue as independent deferred work from completed CPM batch w-7dcd34f3b95a. Read-only verification confirmed parent-completed is the sole availability blocker; preserve acceptance, evidence, priority and deferred implementation status. Tracker repair following Phoenix::Fable mailbox #812; no source or Git changes.",
+  "completion": null,
+  "activity": {
+    "central": {
+      "93b5f1bb05646830ff4a2c7dc57aba1b394a57f2b07da7da879619e38c000b96": {
+        "activity_id": "93b5f1bb05646830ff4a2c7dc57aba1b394a57f2b07da7da879619e38c000b96",
+        "task_id": "01a085cf-1306-7791-8de8-9c84a4478d67",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "greg/codex",
+          "actor_kind": "agent"
+        },
+        "state": "released",
+        "state_revision": 2,
+        "event_id": "90429fdd8133a3f6f149d64913ef13b7ff59f2d9637ec5217bc8174166f28960"
+      }
+    }
+  }
+}

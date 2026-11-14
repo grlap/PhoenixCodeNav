@@ -1,0 +1,30 @@
+{
+  "id": "01a07e42-fdb4-7091-9faa-2ee61390dbde",
+  "external_ref": null,
+  "title": "Demonstrate or falsify Roslyn Unix write-cache collisions on the shipping runtime",
+  "outcome": "Demonstrate or falsify Roslyn Unix write-cache collisions on the shipping runtime",
+  "acceptance": [
+    "Audit existing macOS test exclusions for cache-related masking; document confirmed causes and unknowns without changing policy or broadening exclusions.",
+    "Record loaded Roslyn/native SQLite versions and run an external ad-hoc diagnostic harness with two distinct active persistent stores, actual-write controls, observed flush, before/after sentinel checks, and active-storage assertions; report D1/D2 independently using predeclared outcomes.",
+    "Update docs/roslyn-unix-sqlite-write-cache-investigation.md with measured evidence and an explicit A2 go/no-go recommendation; do not implement a persistence option, edit pinned externals, consume patched packages, commit, or push as part of this diagnostic scope."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "research",
+  "priority": 1,
+  "labels": [
+    "macos",
+    "roslyn",
+    "sqlite"
+  ],
+  "assigned_to": "macOS",
+  "deferred_until": null,
+  "lifecycle": "open",
+  "parent_id": null,
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": null
+}

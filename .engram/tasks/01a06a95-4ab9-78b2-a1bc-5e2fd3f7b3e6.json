@@ -1,0 +1,52 @@
+{
+  "id": "01a06a95-4ab9-78b2-a1bc-5e2fd3f7b3e6",
+  "external_ref": null,
+  "title": "Enforce context_pack UTF-8 maxBytes after retry metadata",
+  "outcome": "Enforce context_pack UTF-8 maxBytes after retry metadata",
+  "acceptance": [
+    "Any fallback or truncation remains machine-observable and retains truthful retry metadata when applicable.",
+    "context_pack responses serialize at or below requested maxBytes and the global hard cap for minimum-budget, cap-plus-one, long multibyte, and cold-retry cases."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "bug",
+  "priority": 1,
+  "labels": [
+    "mcp-contract",
+    "review",
+    "testing"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "completed",
+  "parent_id": "01a06999-065c-7ef3-97f9-6bc6a6d1436d",
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": {
+    "summary": "context_pack now enforces requested UTF-8 maxBytes after all metadata, with truthful bounded fallback and 2 KiB multibyte/freshness coverage.",
+    "completed_at": "2026-09-04T05:09:32.820585900Z",
+    "actor": {
+      "actor_id": "termal",
+      "actor_kind": "agent"
+    }
+  },
+  "activity": {
+    "central": {
+      "06d1337a9466bb1eabd6161b4da2a24568baed587f8dedbae092bda679211b44": {
+        "activity_id": "06d1337a9466bb1eabd6161b4da2a24568baed587f8dedbae092bda679211b44",
+        "task_id": "01a06a95-4ab9-78b2-a1bc-5e2fd3f7b3e6",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "termal",
+          "actor_kind": "agent"
+        },
+        "state": "finished",
+        "state_revision": 2,
+        "event_id": "6b2a038f7d572cc0cfb520ed1a9271d0ae387e6e92689f013c1dd81e491f9597"
+      }
+    }
+  }
+}

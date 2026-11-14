@@ -1,0 +1,40 @@
+{
+  "id": "01a063dd-65a0-74e2-af69-2544249c01d3",
+  "external_ref": null,
+  "title": "Add stable pagination to implementations results",
+  "outcome": "Add stable pagination to implementations results",
+  "acceptance": [
+    "Add stable pagination to implementations results is done"
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "task",
+  "priority": 1,
+  "labels": [],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "open",
+  "parent_id": null,
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": null,
+  "activity": {
+    "central": {
+      "9ffa3046cc9657274c05824b3cfb238bad26d7e60abbb2ad0da3b56089497f6d": {
+        "activity_id": "9ffa3046cc9657274c05824b3cfb238bad26d7e60abbb2ad0da3b56089497f6d",
+        "task_id": "01a063dd-65a0-74e2-af69-2544249c01d3",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "fable",
+          "actor_kind": "agent"
+        },
+        "state": "released",
+        "state_revision": 2,
+        "event_id": "60f2949356d69daa8015f4b87a811a87e1e8ded17d338ad486773a5a0dc1838e"
+      }
+    }
+  }
+}

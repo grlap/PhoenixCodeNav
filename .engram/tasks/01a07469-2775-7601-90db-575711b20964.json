@@ -1,0 +1,30 @@
+{
+  "id": "01a07469-2775-7601-90db-575711b20964",
+  "external_ref": null,
+  "title": "Align F# symbol_at, definition, and references oversized identity with indivisible_semantic_identity",
+  "outcome": "Align F# symbol_at, definition, and references oversized identity with indivisible_semantic_identity",
+  "acceptance": [
+    "Documentation no longer describes the v0.12.87 interim asymmetry between implementations and the other F# semantic operations",
+    "Oversized valid F# identities returned by symbol_at, definition, and references remain complete with responseBudget.reason=indivisible_semantic_identity instead of fsharp_semantic_response_too_large",
+    "OversizedFSharpSymbolFallsBackToTheHardBudgetEnvelope is replaced with a decisive preservation contract test"
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "bug",
+  "priority": 2,
+  "labels": [
+    "fsharp",
+    "mcp-contract",
+    "review"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "open",
+  "parent_id": null,
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": null
+}

@@ -1,0 +1,49 @@
+{
+  "id": "01a06de6-132a-7551-a297-02380abf3c08",
+  "external_ref": null,
+  "title": "Correct hero circular wrap, breakpoint jump, and mobile clipping",
+  "outcome": "Hero copy follows a shared circular boundary around the enlarged sphere, the sphere resizes continuously across desktop widths, and hero content fits mobile viewports.",
+  "acceptance": [
+    "At 390px viewport width, hero copy and actions fit within the shell without clipping.",
+    "Desktop text contours align with the sphere's center and radius, with readable clearance from the animated glow.",
+    "Resizing between 1379px and 1380px does not nearly double the sphere diameter."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "bug",
+  "priority": 1,
+  "labels": [],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "completed",
+  "parent_id": null,
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": {
+    "summary": "Improved the hero composition with sphere-based text wrapping, stronger responsive typography, softer unclipped glow, continuous desktop scaling, correct mobile containment, and robust motion controls.",
+    "completed_at": "2026-09-04T19:49:24.706008Z",
+    "actor": {
+      "actor_id": "greg/codex",
+      "actor_kind": "agent"
+    }
+  },
+  "activity": {
+    "central": {
+      "c79c5bcae083f30edd15f5ae631087d35946f8f064d150363f5b64e95dd0498e": {
+        "activity_id": "c79c5bcae083f30edd15f5ae631087d35946f8f064d150363f5b64e95dd0498e",
+        "task_id": "01a06de6-132a-7551-a297-02380abf3c08",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "greg/codex",
+          "actor_kind": "agent"
+        },
+        "state": "finished",
+        "state_revision": 2,
+        "event_id": "737a54e71d05798fe632bceb39df0b5ca43fb3f3383c9e5ab9d6161986645ed7"
+      }
+    }
+  }
+}

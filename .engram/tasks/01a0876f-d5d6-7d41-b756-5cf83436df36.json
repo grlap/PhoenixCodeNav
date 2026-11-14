@@ -1,0 +1,30 @@
+{
+  "id": "01a0876f-d5d6-7d41-b756-5cf83436df36",
+  "external_ref": null,
+  "title": "Clarify older-daemon refusal retry semantics during session recovery",
+  "outcome": "Clarify older-daemon refusal retry semantics during session recovery",
+  "acceptance": [
+    "test/document unchanged refusal followed by externally replaced compatible daemon; avoid autonomous retirement/start."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "bug",
+  "priority": 2,
+  "labels": [
+    "agent-experience",
+    "daemon",
+    "mcp-contract",
+    "recovery",
+    "review"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "superseded",
+  "parent_id": "01a08735-5bf6-7463-a954-43e838d04c76",
+  "child_requirement": "optional",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": "01a0878d-bca9-7d80-bc1b-2897a8341338",
+  "disposal_reason": "Original dual review verified the implementation complete; this nonblocking residual remains open and must be independently actionable after its parent completion. Preserve original findings, provenance and latest qualifications.",
+  "completion": null
+}

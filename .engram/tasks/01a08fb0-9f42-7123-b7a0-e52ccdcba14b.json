@@ -1,0 +1,53 @@
+{
+  "id": "01a08fb0-9f42-7123-b7a0-e52ccdcba14b",
+  "external_ref": null,
+  "title": "Emit a diagnostic for swallowed daemon recovery cleanup failures",
+  "outcome": "Unexpected recovery cleanup failures are observable without changing typed results, caller cancellation, shutdown status, or disclosing exception messages and paths.",
+  "acceptance": [
+    "Tests inject unexpected client disposal, stream disposal and in-flight-attempt faults and assert an exception-type-only diagnostic while preserving the original unavailable/uncertain result, cancellation and shutdown status. Diagnostic sink failures must not replace those primary outcomes."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "task",
+  "priority": 3,
+  "labels": [
+    "daemon",
+    "mcp-contract",
+    "performance",
+    "review",
+    "security"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "completed",
+  "parent_id": null,
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": {
+    "summary": "Implemented nonthrowing, exception-type-only recovery cleanup diagnostics with result/cancellation/shutdown precedence preserved; red/green and mutant-tested, full gates green, full-union dual review complete.",
+    "completed_at": "2026-09-11T09:55:45.080786400Z",
+    "actor": {
+      "actor_id": "greg/codex",
+      "actor_kind": "agent"
+    }
+  },
+  "activity": {
+    "central": {
+      "e30cd06e18f228a5a883ec93fad1011bab6e211bda7e4207721643f4ebcc5bd4": {
+        "activity_id": "e30cd06e18f228a5a883ec93fad1011bab6e211bda7e4207721643f4ebcc5bd4",
+        "task_id": "01a08fb0-9f42-7123-b7a0-e52ccdcba14b",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "greg/codex",
+          "actor_kind": "agent"
+        },
+        "state": "finished",
+        "state_revision": 2,
+        "event_id": "4bd70fc0fddebe313f2381d96a64f1b03a492341fd16758d7635d8004c13754b"
+      }
+    }
+  }
+}

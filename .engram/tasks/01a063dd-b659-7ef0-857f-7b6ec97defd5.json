@@ -1,0 +1,78 @@
+{
+  "id": "01a063dd-b659-7ef0-857f-7b6ec97defd5",
+  "external_ref": null,
+  "title": "Preserve unsupported-language evidence in scoped symbol search",
+  "outcome": "A csharp-scoped symbol query over a path scope containing only unsupported-language files reports that scope mismatch rather than a generic symbol miss.",
+  "acceptance": [
+    "A product test distinguishes that response from a genuine C# symbol_not_found result.",
+    "search_symbol lang=csharp with a pathGlob covering only unsupported files returns stable structured unsupported-language or no-language-in-scope evidence."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "bug",
+  "priority": 1,
+  "labels": [
+    "agent-experience",
+    "mcp-contract",
+    "review",
+    "search",
+    "semantic"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "completed",
+  "parent_id": "01a063dd-836b-7942-9094-a0b1986c7314",
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": {
+    "summary": "Closed scoped symbol-search language-evidence coverage in fdcd442.",
+    "completed_at": "2026-09-04T17:06:49.636685100Z",
+    "actor": {
+      "actor_id": "greg/codex",
+      "actor_kind": "agent"
+    }
+  },
+  "activity": {
+    "central": {
+      "000c6e583be4527e4b1d1eedd5e8dab380ac3488f514cd81b349b7587abb984b": {
+        "activity_id": "000c6e583be4527e4b1d1eedd5e8dab380ac3488f514cd81b349b7587abb984b",
+        "task_id": "01a063dd-b659-7ef0-857f-7b6ec97defd5",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "fable",
+          "actor_kind": "agent"
+        },
+        "state": "released",
+        "state_revision": 2,
+        "event_id": "f68375c7c20a08e0dadd8f24aae249ad9eb46f452ae4cedae373cb8e75f48c35"
+      },
+      "39e84f4d7046e410e0aaac8e9cf6ebfa6e8e7e23eeecee3bd78263cd13ede66b": {
+        "activity_id": "39e84f4d7046e410e0aaac8e9cf6ebfa6e8e7e23eeecee3bd78263cd13ede66b",
+        "task_id": "01a063dd-b659-7ef0-857f-7b6ec97defd5",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "greg/codex",
+          "actor_kind": "agent"
+        },
+        "state": "started",
+        "state_revision": 1,
+        "event_id": "39e84f4d7046e410e0aaac8e9cf6ebfa6e8e7e23eeecee3bd78263cd13ede66b"
+      },
+      "963dc6325eda7555717942bb714d49f8d49e79cdeaa3349be4196d470f981391": {
+        "activity_id": "963dc6325eda7555717942bb714d49f8d49e79cdeaa3349be4196d470f981391",
+        "task_id": "01a063dd-b659-7ef0-857f-7b6ec97defd5",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "greg/codex",
+          "actor_kind": "agent"
+        },
+        "state": "finished",
+        "state_revision": 2,
+        "event_id": "3b75d6d0192f2c4ee0cc7e66e19419d1fe228313e8cdae4006044e178c623a6d"
+      }
+    }
+  }
+}

@@ -1,0 +1,45 @@
+{
+  "id": "01a063dd-daf7-7552-b868-c9740a4b0157",
+  "external_ref": null,
+  "title": "Make project_graph direction null-safe",
+  "outcome": "An explicit JSON null direction returns a structured domain result or the documented default rather than a transport exception.",
+  "acceptance": [
+    "direction null is normalized safely and a product test proves no NullReferenceException escapes."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "bug",
+  "priority": 3,
+  "labels": [
+    "agent-experience",
+    "mcp-contract",
+    "navigation",
+    "review"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "open",
+  "parent_id": "01a063dd-8ce6-7512-af26-59df9cfe8be2",
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": null,
+  "activity": {
+    "central": {
+      "911bc291ca29698d0107cfc69b576544a8ba3d82bdd0c07c90cf5a363d02d2bf": {
+        "activity_id": "911bc291ca29698d0107cfc69b576544a8ba3d82bdd0c07c90cf5a363d02d2bf",
+        "task_id": "01a063dd-daf7-7552-b868-c9740a4b0157",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "fable",
+          "actor_kind": "agent"
+        },
+        "state": "released",
+        "state_revision": 2,
+        "event_id": "bd610763903dda02237019fec4737fa76ce76aa9c8e5aad95773be4cab6ba148"
+      }
+    }
+  }
+}

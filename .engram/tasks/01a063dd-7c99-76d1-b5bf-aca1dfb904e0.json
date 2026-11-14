@@ -1,0 +1,44 @@
+{
+  "id": "01a063dd-7c99-76d1-b5bf-aca1dfb904e0",
+  "external_ref": null,
+  "title": "Exercise every WaitUntilReady freshness predicate",
+  "outcome": "The readiness regression test proves queryability, ready state, and a null incomplete reason are each independently required.",
+  "acceptance": [
+    "The test asserts every pre-fresh observation is consumed before WaitUntilReady returns",
+    "The test observes a queryable stale snapshot, a ready snapshot with an incomplete reason, and a final fresh queryable snapshot"
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "task",
+  "priority": 2,
+  "labels": [
+    "review",
+    "testing"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "open",
+  "parent_id": "01a063dd-7b2f-78e2-b2cc-385fd932b308",
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": null,
+  "activity": {
+    "central": {
+      "ad5c835856584ea9545170701180070e399a72a27b8f5318b505cec10d6437b8": {
+        "activity_id": "ad5c835856584ea9545170701180070e399a72a27b8f5318b505cec10d6437b8",
+        "task_id": "01a063dd-7c99-76d1-b5bf-aca1dfb904e0",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "fable",
+          "actor_kind": "agent"
+        },
+        "state": "released",
+        "state_revision": 2,
+        "event_id": "d09196b6a1c0a8064303476ff546c1cce3e7db8cfbc52f1a02caed62730cf639"
+      }
+    }
+  }
+}

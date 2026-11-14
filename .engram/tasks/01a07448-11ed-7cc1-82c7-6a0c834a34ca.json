@@ -1,0 +1,55 @@
+{
+  "id": "01a07448-11ed-7cc1-82c7-6a0c834a34ca",
+  "external_ref": null,
+  "title": "Prevent hero ResizeObserver feedback loops",
+  "outcome": "Prevent hero ResizeObserver feedback loops",
+  "acceptance": [
+    "The hero resize path does not mutate observed copy/details geometry in a feedback loop, verified without ResizeObserver loop errors or repeated stable-viewport reseeding."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "bug",
+  "priority": 3,
+  "labels": [
+    "review",
+    "website"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "open",
+  "parent_id": null,
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": null,
+  "activity": {
+    "central": {
+      "01ec8ab2f9008e3a793f0565b4f62bfc3ae158b795ce4d01624331caad337c56": {
+        "activity_id": "01ec8ab2f9008e3a793f0565b4f62bfc3ae158b795ce4d01624331caad337c56",
+        "task_id": "01a07448-11ed-7cc1-82c7-6a0c834a34ca",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "greg/codex",
+          "actor_kind": "agent"
+        },
+        "state": "released",
+        "state_revision": 2,
+        "event_id": "7eb8878ac7f91d69c88ad62cfb9b58173fa60d60c308250ceea3defe4c55a3da"
+      },
+      "f9c28f96af6ddb9ed12df6aa8b35d00bc35052ae15dd53b7db5d4a797a300361": {
+        "activity_id": "f9c28f96af6ddb9ed12df6aa8b35d00bc35052ae15dd53b7db5d4a797a300361",
+        "task_id": "01a07448-11ed-7cc1-82c7-6a0c834a34ca",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "greg/codex",
+          "actor_kind": "agent"
+        },
+        "state": "released",
+        "state_revision": 2,
+        "event_id": "11dc1e9877a35aa2117a18024a497cfc71f91944c8245855a99b2862d6ffea14"
+      }
+    }
+  }
+}

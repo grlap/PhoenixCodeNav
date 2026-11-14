@@ -1,0 +1,44 @@
+{
+  "id": "01a07547-607c-70f2-b288-7459d17f0135",
+  "external_ref": null,
+  "title": "Measure and reduce oversized hero canvas backing-store cost without changing desktop rendering",
+  "outcome": "Measure and reduce oversized hero canvas backing-store cost without changing desktop rendering",
+  "acceptance": [
+    "Measure backing-store and render cost across DPR and viewport sizes.",
+    "Propose or implement a cap only with pixel-identical desktop rendering evidence; preserve the agreed hero appearance and motion behavior."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "research",
+  "priority": 3,
+  "labels": [
+    "performance",
+    "website"
+  ],
+  "assigned_to": "Website",
+  "deferred_until": null,
+  "lifecycle": "open",
+  "parent_id": null,
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": null,
+  "activity": {
+    "central": {
+      "57959160e2399779affc5ae0d56a52bba9519552666acaf9513ece30dfa1cb5f": {
+        "activity_id": "57959160e2399779affc5ae0d56a52bba9519552666acaf9513ece30dfa1cb5f",
+        "task_id": "01a07547-607c-70f2-b288-7459d17f0135",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "greg/codex",
+          "actor_kind": "agent"
+        },
+        "state": "released",
+        "state_revision": 2,
+        "event_id": "511bcc49eccbf208c7f5cb9edf56eb8989c4521362d9565e98616056388d0d4d"
+      }
+    }
+  }
+}

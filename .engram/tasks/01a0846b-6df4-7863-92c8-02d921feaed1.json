@@ -1,0 +1,32 @@
+{
+  "id": "01a0846b-6df4-7863-92c8-02d921feaed1",
+  "external_ref": null,
+  "title": "Pin non-empty self comparison inside a compound condition",
+  "outcome": "Pin non-empty self comparison inside a compound condition",
+  "acceptance": [
+    "Add non-empty self comparison combined with And and assert fsharp_semantic_condition_property_unresolved."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "task",
+  "priority": 3,
+  "labels": [
+    "architecture",
+    "csharp",
+    "fsharp",
+    "msbuild",
+    "review",
+    "semantic",
+    "semantic-correctness"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "open",
+  "parent_id": "01a0843d-0097-77f3-af41-c7383c62647a",
+  "child_requirement": "optional",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": null
+}

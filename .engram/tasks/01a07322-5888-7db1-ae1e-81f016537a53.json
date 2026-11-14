@@ -1,0 +1,32 @@
+{
+  "id": "01a07322-5888-7db1-ae1e-81f016537a53",
+  "external_ref": null,
+  "title": "Stabilize Windows worktree targeted-reconcile detection under full-suite Git load",
+  "outcome": "The Batch41 worktree reconcile test reliably observes the intended targeted Windows path under concurrent full-suite load, or reports a typed Git fallback cause instead of an unexplained full sweep.",
+  "acceptance": [
+    "A transient ChangedFiles or DirtyFiles failure is attributable by a stable test/diagnostic signal.",
+    "IndexWorktreeSeedsReconcilesCommitsAndDirtWithoutTouchingMain passes repeatedly inside the uninterrupted full five-project suite."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "bug",
+  "priority": 2,
+  "labels": [
+    "daemon",
+    "git",
+    "mcp-contract",
+    "review",
+    "testing",
+    "windows"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "open",
+  "parent_id": "01a072be-3cbf-7900-8086-ffa06c2a8671",
+  "child_requirement": "optional",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": null
+}

@@ -1,0 +1,57 @@
+{
+  "id": "01a08350-8890-7b61-8b1f-e9057608d2cb",
+  "external_ref": null,
+  "title": "Track StartsWith receiver properties in bounded dependency scans",
+  "outcome": "StartsWith receiver properties participate in evaluation-order and Directory.Build dependency discovery exactly like simple property references.",
+  "acceptance": [
+    "A StartsWith-conditioned item followed by a receiver reassignment fails closed with fsharp_semantic_evaluation_order_unsupported instead of returning stale compiler inputs.",
+    "Imported receiver dependencies are tracked.",
+    "No evaluator limit changes."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "bug",
+  "priority": 1,
+  "labels": [
+    "architecture",
+    "csharp",
+    "fsharp",
+    "msbuild",
+    "review",
+    "semantic",
+    "semantic-correctness"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "completed",
+  "parent_id": "01a08337-0a68-7cf1-bd32-0478506fde2c",
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": {
+    "summary": "StartsWith receiver properties are tracked by both bounded dependency scans with decisive direct and Directory.Build order regressions.",
+    "completed_at": "2026-09-08T23:48:41.064993700Z",
+    "actor": {
+      "actor_id": "greg/codex",
+      "actor_kind": "agent"
+    }
+  },
+  "activity": {
+    "central": {
+      "f74b0b70037afecacd52d3d30e843e12c02a0e5a58fbf3a8d198d8b19c7e4991": {
+        "activity_id": "f74b0b70037afecacd52d3d30e843e12c02a0e5a58fbf3a8d198d8b19c7e4991",
+        "task_id": "01a08350-8890-7b61-8b1f-e9057608d2cb",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "greg/codex",
+          "actor_kind": "agent"
+        },
+        "state": "finished",
+        "state_revision": 2,
+        "event_id": "eec2835bb84e206e17e1536c569ab1d9ca5738a23f6fdd38fc5adef839fb4b8d"
+      }
+    }
+  }
+}

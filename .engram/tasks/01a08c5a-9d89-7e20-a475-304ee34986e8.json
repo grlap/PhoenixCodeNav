@@ -1,0 +1,31 @@
+{
+  "id": "01a08c5a-9d89-7e20-a475-304ee34986e8",
+  "external_ref": null,
+  "title": "Restore the ReadMetadata doc comment displaced by EvaluatedFSharpInputsReady",
+  "outcome": "Restore the ReadMetadata doc comment displaced by EvaluatedFSharpInputsReady",
+  "acceptance": [
+    "ReadMetadata again owns its persisted-identity/pinned-snapshot XML summary, and EvaluatedFSharpInputsReady has separate accurate readiness documentation."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "task",
+  "priority": 3,
+  "labels": [
+    "architecture",
+    "default",
+    "fsharp",
+    "project-model",
+    "review",
+    "semantic"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "superseded",
+  "parent_id": "01a08c08-cb5e-7b42-a5e0-1f02de81511c",
+  "child_requirement": "optional",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": "01a08c62-5b0e-7661-9b95-5986a68e5401",
+  "disposal_reason": "Continue this accepted nonblocking review follow-up independently after the reviewed parent delivery was committed and pushed as051cbc2; preserve original parent provenance and acceptance.",
+  "completion": null
+}

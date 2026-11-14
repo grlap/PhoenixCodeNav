@@ -1,0 +1,29 @@
+{
+  "id": "01a07d60-a004-7b13-982b-0b312275efc7",
+  "external_ref": null,
+  "title": "Keep the Batch45 strict delete as a product-owned pool-release proof",
+  "outcome": "The process-follower strict workspace deletion detects regressions in IndexManager-owned SQLite pool release instead of clearing those pools from the test.",
+  "acceptance": [
+    "Focused and full Windows gates pass with no codenav-45-process-follower residual.",
+    "ShutdownAsync remains responsible for writer pool release and the retry-free delete still asserts workspace absence.",
+    "WindowsFollowerKeepsServingCommittedStateAcrossWriterExitAndSuccessorRebuild does not call ClearIndexPools before its strict root deletion when all pools are product-owned."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "task",
+  "priority": 3,
+  "labels": [
+    "review",
+    "testing"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "open",
+  "parent_id": null,
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": null
+}

@@ -1,0 +1,52 @@
+{
+  "id": "01a08750-3ec8-75c0-8441-4dec32e3e8f6",
+  "external_ref": null,
+  "title": "Reject reserved project extension assignment in filtered Directory.Build.targets groups",
+  "outcome": "Reject reserved project extension assignment in filtered Directory.Build.targets groups",
+  "acceptance": [
+    "ProjectExtensionRejectsReservedPropertyAssignment with Directory.Build.targets passes without weakening reserved-property refusal."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "bug",
+  "priority": 1,
+  "labels": [
+    "csharp",
+    "fsharp",
+    "msbuild",
+    "semantic-correctness"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "completed",
+  "parent_id": "01a08737-d98f-79d0-8561-647172590308",
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": {
+    "summary": "Reserved MSBuildProjectExtension assignment in filtered Directory.Build.targets is rejected, without weakening existing evaluation-order rules. Isolated decisive targets fixture plus full1756/0/2 pass; both original reviewers verified shared extension semantics.",
+    "completed_at": "2026-09-09T18:59:37.305914700Z",
+    "actor": {
+      "actor_id": "greg/codex",
+      "actor_kind": "agent"
+    }
+  },
+  "activity": {
+    "central": {
+      "f9a2e12d46c0fa0906197913eeb18d830b4a4e0b44b17a3e2e18643db6a7197b": {
+        "activity_id": "f9a2e12d46c0fa0906197913eeb18d830b4a4e0b44b17a3e2e18643db6a7197b",
+        "task_id": "01a08750-3ec8-75c0-8441-4dec32e3e8f6",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "greg/codex",
+          "actor_kind": "agent"
+        },
+        "state": "finished",
+        "state_revision": 2,
+        "event_id": "5823c18564b4095c898191ede2f6528a3769c93ab742cbebcdb3fb7840029eeb"
+      }
+    }
+  }
+}

@@ -1,0 +1,30 @@
+{
+  "id": "01a0876f-d596-7950-8d78-53063d905ea0",
+  "external_ref": null,
+  "title": "Separate the in-session recovery gate from the client-facing retryable hint",
+  "outcome": "Separate the in-session recovery gate from the client-facing retryable hint",
+  "acceptance": [
+    "explicit recoverability rule and retryable payload test. Deferred from current correction round."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "bug",
+  "priority": 2,
+  "labels": [
+    "agent-experience",
+    "daemon",
+    "mcp-contract",
+    "recovery",
+    "review"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "superseded",
+  "parent_id": "01a08735-5bf6-7463-a954-43e838d04c76",
+  "child_requirement": "optional",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": "01a0878d-bc91-7043-8e80-f5e7f85e0bfb",
+  "disposal_reason": "Original dual review verified the implementation complete; this nonblocking residual remains open and must be independently actionable after its parent completion. Preserve original findings, provenance and latest qualifications.",
+  "completion": null
+}

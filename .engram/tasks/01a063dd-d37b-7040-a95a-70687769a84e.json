@@ -1,0 +1,65 @@
+{
+  "id": "01a063dd-d37b-7040-a95a-70687769a84e",
+  "external_ref": null,
+  "title": "Share one semantic deadline across documentationCommentId resolution and navigation",
+  "outcome": "The caller's timeout covers documentation-ID resolution plus the definition, references, or implementations operation, and timing reports both phases honestly.",
+  "acceptance": [
+    "Each documentationCommentId operation finishes within its single requested timeout budget in total.",
+    "Timing exposes documentation-ID resolution and the remaining operation phase; cold-path tests prove the deadline is not doubled."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "bug",
+  "priority": 1,
+  "labels": [
+    "agent-experience",
+    "mcp-contract",
+    "review",
+    "semantic"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "completed",
+  "parent_id": "01a063dd-887c-7630-9f20-3e13e01e490b",
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": {
+    "summary": "Delivered one shared semantic deadline across documentationCommentId resolution and downstream navigation with honest phase timing.",
+    "completed_at": "2026-09-04T16:05:37.223870300Z",
+    "actor": {
+      "actor_id": "greg/codex",
+      "actor_kind": "agent"
+    }
+  },
+  "activity": {
+    "central": {
+      "b5a53618bb7f7d389ba12e25fa5d7205eb4c01565a5a4a84c2d06f2071ce4084": {
+        "activity_id": "b5a53618bb7f7d389ba12e25fa5d7205eb4c01565a5a4a84c2d06f2071ce4084",
+        "task_id": "01a063dd-d37b-7040-a95a-70687769a84e",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "greg/codex",
+          "actor_kind": "agent"
+        },
+        "state": "finished",
+        "state_revision": 2,
+        "event_id": "ee04eb8a13a1b3cea2752d8cde9c6a45b38513a9ad1e67f4d9e0b08f4a008e72"
+      },
+      "bb14e365e30e94da558ecb339525ab20d28ace5f896fcd076aafe357bbf8e4f5": {
+        "activity_id": "bb14e365e30e94da558ecb339525ab20d28ace5f896fcd076aafe357bbf8e4f5",
+        "task_id": "01a063dd-d37b-7040-a95a-70687769a84e",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "fable",
+          "actor_kind": "agent"
+        },
+        "state": "released",
+        "state_revision": 2,
+        "event_id": "d6b943d92c61a7315f33367e996241c1c10ef34da50e9ff8f36e4d1a73937339"
+      }
+    }
+  }
+}

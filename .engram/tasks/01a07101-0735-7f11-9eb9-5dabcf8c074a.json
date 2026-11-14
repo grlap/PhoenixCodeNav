@@ -1,0 +1,50 @@
+{
+  "id": "01a07101-0735-7f11-9eb9-5dabcf8c074a",
+  "external_ref": null,
+  "title": "Preserve F# dependency diagnostics in root semantic results",
+  "outcome": "Preserve F# dependency diagnostics in root semantic results",
+  "acceptance": [
+    "A public F# semantic tool surfaces a referenced child project's diagnostic with child source provenance and reports indexed rather than exact confidence."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "bug",
+  "priority": 1,
+  "labels": [
+    "review",
+    "semantic-correctness"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "completed",
+  "parent_id": "01a063dd-599c-7253-999b-3eff45080442",
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": {
+    "summary": "Checked every captured F# project once dependency-first and deduplicated its diagnostics by stable physical diagnostic identity before root file shaping.",
+    "completed_at": "2026-09-05T10:39:23.614405600Z",
+    "actor": {
+      "actor_id": "greg/codex",
+      "actor_kind": "agent"
+    }
+  },
+  "activity": {
+    "central": {
+      "514e228148db584bcbaa24fff7c90b1108f9bbce6f7342654ae1897e12a26241": {
+        "activity_id": "514e228148db584bcbaa24fff7c90b1108f9bbce6f7342654ae1897e12a26241",
+        "task_id": "01a07101-0735-7f11-9eb9-5dabcf8c074a",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "greg/codex",
+          "actor_kind": "agent"
+        },
+        "state": "finished",
+        "state_revision": 2,
+        "event_id": "7951cdbb42f4d38ac68d8c9b0c291a03505acf2a273eea4001cf7da3731e5fbd"
+      }
+    }
+  }
+}

@@ -1,0 +1,59 @@
+{
+  "id": "01a0831c-26fc-7863-ab49-86cc3965ec64",
+  "external_ref": null,
+  "title": "Preserve bounded import Exists semantics and memoize indexed probes",
+  "outcome": "Existing .props Exists budget behavior remains unchanged and repeated generic indexed probes reuse one pinned decision.",
+  "acceptance": [
+    "No new or changed limit is introduced.",
+    "Props Exists continues through the existing import resolver and existing import budgets.",
+    "Repeated indexed Exists calls within one evaluation issue one resolver lookup."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "bug",
+  "priority": 2,
+  "labels": [
+    "architecture",
+    "csharp",
+    "fsharp",
+    "index-freshness",
+    "mcp-contract",
+    "msbuild",
+    "performance",
+    "review",
+    "semantic"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "completed",
+  "parent_id": "01a082f6-d27c-74c1-861e-b692f43dbf1b",
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": {
+    "summary": "Preserved the existing .props import resolver and all existing budgets, added memoization for generic indexed probes, and changed no limit.",
+    "completed_at": "2026-09-08T22:41:39.416125800Z",
+    "actor": {
+      "actor_id": "greg/codex",
+      "actor_kind": "agent"
+    }
+  },
+  "activity": {
+    "central": {
+      "5be27f8fd943dd369b470df73741831ec1864c29b522ebc0b5a89aba35244d19": {
+        "activity_id": "5be27f8fd943dd369b470df73741831ec1864c29b522ebc0b5a89aba35244d19",
+        "task_id": "01a0831c-26fc-7863-ab49-86cc3965ec64",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "greg/codex",
+          "actor_kind": "agent"
+        },
+        "state": "finished",
+        "state_revision": 2,
+        "event_id": "b2634139f9867906c398464fa733d8df3ec0ca95582847f19d3f6a03b25c5f7f"
+      }
+    }
+  }
+}

@@ -1,0 +1,52 @@
+{
+  "id": "01a084fb-b2cd-78d2-bcc7-411bf47d600b",
+  "external_ref": null,
+  "title": "Pin default-context no-implicit-defines contract",
+  "outcome": "Pin default-context no-implicit-defines contract",
+  "acceptance": [
+    "Default-context test asserts no implicit DEBUG/TRACE or PlatformTarget settings."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "task",
+  "priority": 3,
+  "labels": [
+    "fsharp",
+    "review",
+    "semantic-correctness",
+    "testing"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "completed",
+  "parent_id": null,
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": {
+    "summary": "AnalysisContextDoesNotSynthesizeCompilerDefinesOrPlatformTarget explicitly rejects implicit DEBUG/TRACE and --platform: flags under seeded context. Dual review CLEAN; focused30/30 and full1633/0.",
+    "completed_at": "2026-09-09T07:04:57.913755600Z",
+    "actor": {
+      "actor_id": "greg/codex",
+      "actor_kind": "agent"
+    }
+  },
+  "activity": {
+    "central": {
+      "0c0eaf0f5638c4bff368764670da379ec8042bf7d96f1a601ad33c56141ac667": {
+        "activity_id": "0c0eaf0f5638c4bff368764670da379ec8042bf7d96f1a601ad33c56141ac667",
+        "task_id": "01a084fb-b2cd-78d2-bcc7-411bf47d600b",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "greg/codex",
+          "actor_kind": "agent"
+        },
+        "state": "finished",
+        "state_revision": 2,
+        "event_id": "59ce67c8d7de0df509f1cf93e3814741746cc1a661989521c8f1adecad8b8761"
+      }
+    }
+  }
+}

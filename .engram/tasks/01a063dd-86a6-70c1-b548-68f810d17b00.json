@@ -1,0 +1,47 @@
+{
+  "id": "01a063dd-86a6-70c1-b548-68f810d17b00",
+  "external_ref": null,
+  "title": "Extend dual list-string parsing across MCP arguments",
+  "outcome": "List-like MCP string arguments consistently accept comma-separated values and JSON-array encoded strings without changing their host-compatible schemas.",
+  "acceptance": [
+    "Invalid encodings return the established bounded structured domain-error shape.",
+    "Kinds, usage kinds, spans, and every other selected list-like string argument normalize CSV and JSON-array encoded strings identically.",
+    "Published MCP schemas remain string-based and existing callers retain their behavior.",
+    "The capability is represented by its own features[] identifier and BuildInfo.Version is bumped."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "feature",
+  "priority": 2,
+  "labels": [
+    "agent-experience",
+    "compatibility",
+    "mcp-contract"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "open",
+  "parent_id": null,
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": null,
+  "activity": {
+    "central": {
+      "25a3bf2f3262ce594cd918240e80912389c5e4b50eba8e2ed8f853cf9d0bd60b": {
+        "activity_id": "25a3bf2f3262ce594cd918240e80912389c5e4b50eba8e2ed8f853cf9d0bd60b",
+        "task_id": "01a063dd-86a6-70c1-b548-68f810d17b00",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "fable",
+          "actor_kind": "agent"
+        },
+        "state": "released",
+        "state_revision": 2,
+        "event_id": "4dc9c7a976628dd26d31e31c5dc4298cacc78f700f943b13f5e7ffba81a19c12"
+      }
+    }
+  }
+}

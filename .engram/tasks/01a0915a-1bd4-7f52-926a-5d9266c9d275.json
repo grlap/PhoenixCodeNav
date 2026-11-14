@@ -1,0 +1,54 @@
+{
+  "id": "01a0915a-1bd4-7f52-926a-5d9266c9d275",
+  "external_ref": null,
+  "title": "Await recovery test peers before disposing their NetworkStreams",
+  "outcome": "Recovery failure test cleanup cancels and observes its peer tasks before disposing the NetworkStreams those tasks use; it cannot race a read with local disposal or mask behavior assertions.",
+  "acceptance": [
+    "DispatchedRecoveryFailuresNeverReplayAndNextCallUsesAWorkingConnection passes every row, including initialize-protocol-error/capabilities:false, and the complete Release solution suite passes after the cleanup-order fix."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "task",
+  "priority": 2,
+  "labels": [
+    "architecture",
+    "daemon",
+    "mcp-contract",
+    "recovery",
+    "review",
+    "testing"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "completed",
+  "parent_id": "01a09140-22a7-7fd2-978e-f6193f217a1d",
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": {
+    "summary": "Manual recovery peer teardown now cancels and awaits both token-aware TCP readers before disposing owned streams. All8 failure/no-replay rows pass; no broadened ObjectDisposedException suppression. Latent base fixture race fixed, not product defect. Implemented and full-union reviewed; not committed or pushed.",
+    "completed_at": "2026-09-11T17:18:17.018943500Z",
+    "actor": {
+      "actor_id": "greg/codex",
+      "actor_kind": "agent"
+    }
+  },
+  "activity": {
+    "central": {
+      "005dad3ba9a8d86aa42059912f0892813e820fe8f0f37ea8ce316ab59d94252f": {
+        "activity_id": "005dad3ba9a8d86aa42059912f0892813e820fe8f0f37ea8ce316ab59d94252f",
+        "task_id": "01a0915a-1bd4-7f52-926a-5d9266c9d275",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "greg/codex",
+          "actor_kind": "agent"
+        },
+        "state": "finished",
+        "state_revision": 2,
+        "event_id": "9e3683dd123d2faa7962dfbe9896e3a59cfb45f0fd29329604d307bfd9e7ed79"
+      }
+    }
+  }
+}

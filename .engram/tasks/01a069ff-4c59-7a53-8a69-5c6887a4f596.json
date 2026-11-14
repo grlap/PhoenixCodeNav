@@ -1,0 +1,27 @@
+{
+  "id": "01a069ff-4c59-7a53-8a69-5c6887a4f596",
+  "external_ref": null,
+  "title": "Assert non-documentationCommentId selectors omit documentationIdCoverage",
+  "outcome": "Pin the documented collision-disclosure exclusivity at the behavior level.",
+  "acceptance": [
+    "A definition, references, or implementations request made without documentationCommentId asserts that the response omits documentationIdCoverage."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "task",
+  "priority": 3,
+  "labels": [
+    "review",
+    "testing"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "open",
+  "parent_id": "01a06999-0624-7d21-89c3-c9f11c0f3912",
+  "child_requirement": "optional",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": null
+}

@@ -1,0 +1,53 @@
+{
+  "id": "01a0878d-bc91-7043-8e80-f5e7f85e0bfb",
+  "external_ref": null,
+  "title": "Separate the in-session recovery gate from the client-facing retryable hint",
+  "outcome": "Separate the in-session recovery gate from the client-facing retryable hint",
+  "acceptance": [
+    "explicit recoverability rule and retryable payload test. Deferred from current correction round."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "bug",
+  "priority": 2,
+  "labels": [
+    "agent-experience",
+    "daemon",
+    "mcp-contract",
+    "recovery",
+    "review"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "completed",
+  "parent_id": null,
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": {
+    "summary": "Fixed and dual-reviewed: both in-session decisions use computed cause-based eligibility, independent of public Retryable; daemon_proxy_failed payload now truthfully advises retrying a new MCP connection while remaining a terminal generic-error shim. Payload RED/GREEN, both gate controls, startup-frame preservation and30-kill mutant verified; full2132/0 and external gates passed. Existing recovery-advertisement and optional test-scope follow-ups remain open. No commit/push.",
+    "completed_at": "2026-09-11T02:47:13.758447900Z",
+    "actor": {
+      "actor_id": "greg/codex",
+      "actor_kind": "agent"
+    }
+  },
+  "activity": {
+    "central": {
+      "2d241a2548cf37d8f11ca3ba398a5bb17d744e563215ea84255cfa33a085f9c7": {
+        "activity_id": "2d241a2548cf37d8f11ca3ba398a5bb17d744e563215ea84255cfa33a085f9c7",
+        "task_id": "01a0878d-bc91-7043-8e80-f5e7f85e0bfb",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "greg/codex",
+          "actor_kind": "agent"
+        },
+        "state": "finished",
+        "state_revision": 2,
+        "event_id": "713dfdc7928c6f7c01e2253e1d9ab2ebb0024e68441fbc4a72a2bedd1babe9c1"
+      }
+    }
+  }
+}

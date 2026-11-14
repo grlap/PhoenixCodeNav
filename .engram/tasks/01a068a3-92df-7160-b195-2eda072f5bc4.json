@@ -1,0 +1,52 @@
+{
+  "id": "01a068a3-92df-7160-b195-2eda072f5bc4",
+  "external_ref": null,
+  "title": "Reject duplicate Phoenix CLI global options",
+  "outcome": "Repeated CLI global options fail explicitly rather than silently choosing the last workspace, index, JSON source, or presentation value.",
+  "acceptance": [
+    "Repeated reserved options return duplicate_field and are covered in PhoenixCliArgumentTests."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "bug",
+  "priority": 3,
+  "labels": [
+    "agent-experience",
+    "cli",
+    "mcp-contract",
+    "review"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "completed",
+  "parent_id": "01a06819-d56e-7e42-99e2-d6c75600a4c8",
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": {
+    "summary": "Repeated CLI global options now return duplicate_field, with PhoenixCliArgumentTests coverage; delivered in eee9ee5.",
+    "completed_at": "2026-09-03T21:34:55.662487700Z",
+    "actor": {
+      "actor_id": "termal",
+      "actor_kind": "agent"
+    }
+  },
+  "activity": {
+    "central": {
+      "88eceed4922272f161cc77c7147bfbe2af59ca3172121e3e630cbe186c54f021": {
+        "activity_id": "88eceed4922272f161cc77c7147bfbe2af59ca3172121e3e630cbe186c54f021",
+        "task_id": "01a068a3-92df-7160-b195-2eda072f5bc4",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "termal",
+          "actor_kind": "agent"
+        },
+        "state": "finished",
+        "state_revision": 2,
+        "event_id": "706de5bbcfdc577071583b764898f0b1194ab5c6939d37859c8bcbce4e56f938"
+      }
+    }
+  }
+}

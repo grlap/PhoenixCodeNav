@@ -1,0 +1,53 @@
+{
+  "id": "01a0874d-4c80-79f0-9a08-3231147b5799",
+  "external_ref": null,
+  "title": "Retain capability growth margin for session recovery and project extension",
+  "outcome": "Retain capability growth margin for session recovery and project extension",
+  "acceptance": [
+    "CapabilitiesDynamicTextUsesExactUtf8BoundaryAndReportsTruncation passes unchanged (2048-byte minimum growth margin); retain all feature IDs and semantics."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "bug",
+  "priority": 1,
+  "labels": [
+    "agent-experience",
+    "daemon",
+    "mcp-contract",
+    "recovery",
+    "review"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "completed",
+  "parent_id": "01a08735-5bf6-7463-a954-43e838d04c76",
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": {
+    "summary": "Existing2048-byte growth-margin gate passes unchanged after concise prose updates retaining every feature ID/claim. Complete capabilities suite/full1756/0/2 and both original reviewers verify no limit or response-budget change.",
+    "completed_at": "2026-09-09T18:59:37.176521200Z",
+    "actor": {
+      "actor_id": "greg/codex",
+      "actor_kind": "agent"
+    }
+  },
+  "activity": {
+    "central": {
+      "642ff3ec4dc750d162c314f4acfe5edae82d3febd37a467e03904ca73cf46603": {
+        "activity_id": "642ff3ec4dc750d162c314f4acfe5edae82d3febd37a467e03904ca73cf46603",
+        "task_id": "01a0874d-4c80-79f0-9a08-3231147b5799",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "greg/codex",
+          "actor_kind": "agent"
+        },
+        "state": "finished",
+        "state_revision": 2,
+        "event_id": "c8532787c01d3f8d773b337e0c1928a94d62e7e4835ac6edf6a0db71a5e222c2"
+      }
+    }
+  }
+}

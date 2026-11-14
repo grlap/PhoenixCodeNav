@@ -1,0 +1,50 @@
+{
+  "id": "01a07101-0829-7a82-86cc-6067a16b3d18",
+  "external_ref": null,
+  "title": "Cover ProjectByPathForHost ambiguity and host-path policy",
+  "outcome": "Cover ProjectByPathForHost ambiguity and host-path policy",
+  "acceptance": [
+    "Tests cover exact lookup, platform case policy, ambiguity refusal, and tool-level fail-closed ProjectReference resolution."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "task",
+  "priority": 2,
+  "labels": [
+    "review",
+    "testing"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "completed",
+  "parent_id": "01a063dd-599c-7253-999b-3eff45080442",
+  "child_requirement": "optional",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": {
+    "summary": "Added direct exact/host-case/ambiguous IndexQueries coverage plus a tool-level ambiguous ProjectReference refusal.",
+    "completed_at": "2026-09-05T10:39:24.141780500Z",
+    "actor": {
+      "actor_id": "greg/codex",
+      "actor_kind": "agent"
+    }
+  },
+  "activity": {
+    "central": {
+      "33ec2eb9eab2b5f3b9c4fe0aec7f20328ed2c67e47053193f7e5cd8adba9aac3": {
+        "activity_id": "33ec2eb9eab2b5f3b9c4fe0aec7f20328ed2c67e47053193f7e5cd8adba9aac3",
+        "task_id": "01a07101-0829-7a82-86cc-6067a16b3d18",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "greg/codex",
+          "actor_kind": "agent"
+        },
+        "state": "finished",
+        "state_revision": 2,
+        "event_id": "ccb7bd00ba18e9208d5c181af4f314d7d1dc26ccea25a64d8e7f1e33280eba3d"
+      }
+    }
+  }
+}

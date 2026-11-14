@@ -1,0 +1,54 @@
+{
+  "id": "01a1af5c-1592-7162-b932-71c71f2980fa",
+  "external_ref": null,
+  "title": "source_id baseline: declared dotnet test on installed TermAl",
+  "outcome": "Capture installed-host behavior for one real declared Phoenix test in a detached worktree, without claiming verification credit or changing Greg's checkout.",
+  "acceptance": [
+    "Prepare a fresh detached worktree at authorized commit2609ceef188b5083d3c7009fe71b5166f55c3e85 with pinned locally initialized submodules and tracked declaration; disclose ordinary Git versus process-only longpath status and run its own prerequisite script only on Opus2's GO without network.",
+    "On Opus2's explicit GO run the first declared command exactly once, preserving TRX path/size/SHA256/counts and verbatim host observation plus presence or absence of verification.",
+    "Report baseline to Opus2 and retain the new worktree for the credited repeat after the assigned TermAl fix."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "research",
+  "priority": 2,
+  "labels": [],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "open",
+  "parent_id": null,
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": null,
+  "activity": {
+    "central": {
+      "08c2295e065b4f9d84e8a6e0f6d585a4": {
+        "activity_id": "08c2295e065b4f9d84e8a6e0f6d585a4",
+        "task_id": "01a1af5c-1592-7162-b932-71c71f2980fa",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "greg/codex",
+          "actor_kind": "agent"
+        },
+        "state": "started",
+        "state_revision": 1,
+        "event_id": "08c2295e065b4f9d84e8a6e0f6d585a4"
+      },
+      "92fc30175a094f64ba46c2c93271d620": {
+        "activity_id": "92fc30175a094f64ba46c2c93271d620",
+        "task_id": "01a1af5c-1592-7162-b932-71c71f2980fa",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "greg/codex",
+          "actor_kind": "agent"
+        },
+        "state": "started",
+        "state_revision": 1,
+        "event_id": "92fc30175a094f64ba46c2c93271d620"
+      }
+    }
+  }
+}

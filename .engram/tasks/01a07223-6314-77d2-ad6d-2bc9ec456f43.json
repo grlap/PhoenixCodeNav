@@ -1,0 +1,30 @@
+{
+  "id": "01a07223-6314-77d2-ad6d-2bc9ec456f43",
+  "external_ref": null,
+  "title": "Disclose the platform-qualified F# TFM fail-closed boundary",
+  "outcome": "Disclose the platform-qualified F# TFM fail-closed boundary",
+  "acceptance": [
+    "The capability manifest and F# documentation say platform-qualified net*-<platform> semantic roots fail closed until exact platform reference packs are supported."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "task",
+  "priority": 3,
+  "labels": [
+    "documentation",
+    "fsharp",
+    "mcp-contract",
+    "review",
+    "semantic"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "open",
+  "parent_id": "01a070c5-95e1-7482-8cd1-326c967e5cb4",
+  "child_requirement": "optional",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": null
+}

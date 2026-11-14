@@ -1,0 +1,32 @@
+{
+  "id": "01a08a14-354e-7fe0-998d-d960ad430acc",
+  "external_ref": null,
+  "title": "Approximate F# counts must still signal scan truncation",
+  "outcome": "Approximate F# counts must still signal scan truncation",
+  "acceptance": [
+    "A focused simple-mode deadline or failed-dependent regression pins that disclosure without restoring a blanket real-workspace totalIsLowerBound claim.",
+    "A simple-mode count response with a deadline, failed scan or unevaluated consumers exposes scan incompleteness separately from model approximation and retains appropriately scoped retry guidance."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "bug",
+  "priority": 2,
+  "labels": [
+    "fsharp",
+    "mcp-contract",
+    "msbuild",
+    "pilot",
+    "project-model",
+    "review"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "open",
+  "parent_id": "01a089a5-604d-7a91-b551-f486866243fd",
+  "child_requirement": "optional",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": null
+}

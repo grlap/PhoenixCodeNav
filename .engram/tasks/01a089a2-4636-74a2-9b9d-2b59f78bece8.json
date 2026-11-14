@@ -1,0 +1,31 @@
+{
+  "id": "01a089a2-4636-74a2-9b9d-2b59f78bece8",
+  "external_ref": null,
+  "title": "Write MSBuild diagnostics through the anchored workspace destination",
+  "outcome": "Write MSBuild diagnostics through the anchored workspace destination",
+  "acceptance": [
+    "A focused product regression distinguishes anchored diagnostic I/O from lexical-root I/O without changing parser results or C# evaluation.",
+    "During an anchored Linux rebuild, diagnostic writes remain attached to the same anchored workspace directory as indexed reads even if the lexical root is replaced; reserved MSBuild path values retain publication identity."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "bug",
+  "priority": 2,
+  "labels": [
+    "architecture",
+    "diagnostics",
+    "msbuild",
+    "review",
+    "security"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "open",
+  "parent_id": "01a08976-b0f6-7c30-a489-74bbf23b3ba8",
+  "child_requirement": "optional",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": null
+}

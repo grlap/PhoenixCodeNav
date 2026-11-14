@@ -1,0 +1,61 @@
+{
+  "id": "01a06ed4-cf65-75a1-8074-480cd3f0ec62",
+  "external_ref": null,
+  "title": "Pin exact F# definition telemetry on the existing signature fixture and indexed confidence under published host fallback",
+  "outcome": "F# telemetry tests prove the actual semantic definition exact path while the single-file host-fallback fixture honestly preserves indexed confidence and disclosed authority reasons.",
+  "acceptance": [
+    "A temporary change of the exact fixture's definition confidence to indexed fails the exact-confidence assertion; final source passes after the mutant is removed.",
+    "On the existing SimpleSignatureAndImplementationOrderSupportsCompilerExactNavigation fixture, definition in semantic mode returns the intended symbol and declarations with meta.confidence exact and matching F# timing/semanticOp telemetry; the assertion is on definition itself, not inherited from symbol_at.",
+    "The existing single-file published fixture continues to use the deliberately empty package cache and pins definition meta.confidence indexed with fsharp_core_reference_host_fallback and fsharp_core_reference_defaulted; product confidence classification is unchanged."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "task",
+  "priority": 1,
+  "labels": [],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "completed",
+  "parent_id": "01a063dd-5c87-7403-9486-fddc946bf93b",
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": {
+    "summary": "Published 4294b363770d85fda540a2265b79e51bc6196fcf; installed v0.12.109 at C:/tools/phoenix-pilot. Implementation and evidence verified: existing signature fixture pins definition confidence exact; empty-cache published fixture retains indexed fallback and explicit authority reasons. Definition-confidence mutation discriminates. No confidence behavior changed.",
+    "completed_at": "2026-09-12T01:10:01.964557800Z",
+    "actor": {
+      "actor_id": "greg/codex",
+      "actor_kind": "agent"
+    }
+  },
+  "activity": {
+    "central": {
+      "01c1ed2f538be57675c461568428cb2a13fe6f01c75830b9f6bf0522b1711461": {
+        "activity_id": "01c1ed2f538be57675c461568428cb2a13fe6f01c75830b9f6bf0522b1711461",
+        "task_id": "01a06ed4-cf65-75a1-8074-480cd3f0ec62",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "greg/codex",
+          "actor_kind": "agent"
+        },
+        "state": "finished",
+        "state_revision": 2,
+        "event_id": "7314802694d82c10597407f4f1a53206c5557f593da66903652273dc0f31173e"
+      },
+      "e82237f147f6cf264d4fbaaaa1cbc300cbf9fdc276bced757ae3ce6bf3f7e9c2": {
+        "activity_id": "e82237f147f6cf264d4fbaaaa1cbc300cbf9fdc276bced757ae3ce6bf3f7e9c2",
+        "task_id": "01a06ed4-cf65-75a1-8074-480cd3f0ec62",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "greg/codex",
+          "actor_kind": "agent"
+        },
+        "state": "released",
+        "state_revision": 2,
+        "event_id": "1c25f943b87495e003d4f67142185a9d6fbe2314487d9a46bfe8f50d8a1b97e4"
+      }
+    }
+  }
+}

@@ -1,0 +1,48 @@
+{
+  "id": "01a06df6-3505-7321-bc58-c286663ada68",
+  "external_ref": null,
+  "title": "Synchronize atlas controls when the frame loop observes reduced motion before its change event",
+  "outcome": "The frame loop applies the existing reduced-motion transition before it stops if it observes the new preference ahead of the media-change notification.",
+  "acceptance": [
+    "A running atlas switched to prefers-reduced-motion renders final state 3, disables its pause control, and remains visually still.",
+    "Returning to no-preference resumes motion unless the user independently paused it."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "bug",
+  "priority": 1,
+  "labels": [],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "completed",
+  "parent_id": "01a06de6-132a-7551-a297-02380abf3c08",
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": {
+    "summary": "The frame loop now invokes the existing reduced-motion transition before stopping if it observes the preference before the media-change callback. Independent consultation confirmed this preserves user pause intent and is safe if the event later arrives.",
+    "completed_at": "2026-09-04T19:49:24.548482600Z",
+    "actor": {
+      "actor_id": "greg/codex",
+      "actor_kind": "agent"
+    }
+  },
+  "activity": {
+    "central": {
+      "aab356250322518caf4de93a76ac9f55018655048fff771fe2407eba41973409": {
+        "activity_id": "aab356250322518caf4de93a76ac9f55018655048fff771fe2407eba41973409",
+        "task_id": "01a06df6-3505-7321-bc58-c286663ada68",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "greg/codex",
+          "actor_kind": "agent"
+        },
+        "state": "finished",
+        "state_revision": 2,
+        "event_id": "adca033360842513296716c7c3fb5b3391895ba888347b0e15a79d51989a23c9"
+      }
+    }
+  }
+}

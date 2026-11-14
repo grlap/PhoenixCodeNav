@@ -1,0 +1,31 @@
+{
+  "id": "01a08274-ac1b-7a70-88ac-aba6e6f1e02e",
+  "external_ref": null,
+  "title": "Pin the host-native MakeRelative separator on Windows",
+  "outcome": "A product-parser regression compares the raw non-identical MakeRelative scalar against a host-native relative path before path normalization.",
+  "acceptance": [
+    "A Windows-capable test uses different project and imported-file directories and asserts a raw conditional or assembly-name value containing the native separator and trailing separator.",
+    "The test fails if MakeRelativeDirectory emits '/' instead of Path.DirectorySeparatorChar on Windows."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "task",
+  "priority": 2,
+  "labels": [
+    "fsharp",
+    "project-model",
+    "review",
+    "semantic",
+    "testing"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "open",
+  "parent_id": "01a0823b-6e95-7072-95c4-ff3a853cc5c5",
+  "child_requirement": "optional",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": null
+}

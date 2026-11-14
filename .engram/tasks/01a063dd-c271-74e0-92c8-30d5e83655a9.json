@@ -1,0 +1,47 @@
+{
+  "id": "01a063dd-c271-74e0-92c8-30d5e83655a9",
+  "external_ref": null,
+  "title": "Make conflicting legacy and explicit query scopes unambiguous",
+  "outcome": "Agents cannot silently request queryScope=all while legacy firstPartyOnly=true forces a narrower result.",
+  "acceptance": [
+    "Conflicting firstPartyOnly=true and queryScope=all either return structured bad_request or follow one explicitly documented precedence rule with conflict evidence.",
+    "Product tests cover the conflict and compatible combinations."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "bug",
+  "priority": 3,
+  "labels": [
+    "agent-experience",
+    "compatibility",
+    "mcp-contract",
+    "review",
+    "search"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "open",
+  "parent_id": "01a063dd-8f5b-7d81-8967-c9c6bcc81b0d",
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": null,
+  "activity": {
+    "central": {
+      "fce34bb649c7afe63c0084da672e0853217d1e6e6c4f17a171e00af0fb942937": {
+        "activity_id": "fce34bb649c7afe63c0084da672e0853217d1e6e6c4f17a171e00af0fb942937",
+        "task_id": "01a063dd-c271-74e0-92c8-30d5e83655a9",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "fable",
+          "actor_kind": "agent"
+        },
+        "state": "released",
+        "state_revision": 2,
+        "event_id": "451679d7921d86e54e7476d69a1c3ab31aafd070eeee041bda85a37264d41372"
+      }
+    }
+  }
+}

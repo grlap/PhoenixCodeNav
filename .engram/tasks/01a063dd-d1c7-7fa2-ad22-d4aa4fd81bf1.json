@@ -1,0 +1,79 @@
+{
+  "id": "01a063dd-d1c7-7fa2-ad22-d4aa4fd81bf1",
+  "external_ref": null,
+  "title": "Bound documentationCommentId seed discovery and semantic sweep",
+  "outcome": "Documentation-ID resolution searches only relevant declaring/enclosing types under one disclosed, owner-approved strategy and compiles only the requested project closure.",
+  "acceptance": [
+    "Any newly introduced numeric bound is explicitly approved by the repository owner before implementation.",
+    "Seed discovery no longer queries namespace segments with int.MaxValue and is cancellable under the operation deadline.",
+    "The semantic sweep iterates requested project IDs rather than the whole resident solution and reports scanned/skipped coverage."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "bug",
+  "priority": 1,
+  "labels": [
+    "agent-experience",
+    "mcp-contract",
+    "performance",
+    "review",
+    "semantic"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "completed",
+  "parent_id": "01a063dd-887c-7630-9f20-3e13e01e490b",
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": {
+    "summary": "Closed bounded documentation-ID seed/sweep coverage in fdcd442.",
+    "completed_at": "2026-09-04T17:06:49.795231300Z",
+    "actor": {
+      "actor_id": "greg/codex",
+      "actor_kind": "agent"
+    }
+  },
+  "activity": {
+    "central": {
+      "7376cbe534060f72323a12003ba120d7364234374231086b8ae1c88a70ebd6ba": {
+        "activity_id": "7376cbe534060f72323a12003ba120d7364234374231086b8ae1c88a70ebd6ba",
+        "task_id": "01a063dd-d1c7-7fa2-ad22-d4aa4fd81bf1",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "greg/codex",
+          "actor_kind": "agent"
+        },
+        "state": "finished",
+        "state_revision": 2,
+        "event_id": "c476d0cfac62bfed462f8fe20cf593a5b2ee2b29a6a1fee59a59b836a8a13713"
+      },
+      "e8979b85e09cfd2aad8cd5047db5e0053f472a7c5d1d26c71f0cba47b22c9633": {
+        "activity_id": "e8979b85e09cfd2aad8cd5047db5e0053f472a7c5d1d26c71f0cba47b22c9633",
+        "task_id": "01a063dd-d1c7-7fa2-ad22-d4aa4fd81bf1",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "greg/codex",
+          "actor_kind": "agent"
+        },
+        "state": "started",
+        "state_revision": 1,
+        "event_id": "e8979b85e09cfd2aad8cd5047db5e0053f472a7c5d1d26c71f0cba47b22c9633"
+      },
+      "f9a04f32087d4d78148e7f86a85c3136041380ee7ef07ca542d8e9f8c4c43d81": {
+        "activity_id": "f9a04f32087d4d78148e7f86a85c3136041380ee7ef07ca542d8e9f8c4c43d81",
+        "task_id": "01a063dd-d1c7-7fa2-ad22-d4aa4fd81bf1",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "fable",
+          "actor_kind": "agent"
+        },
+        "state": "released",
+        "state_revision": 2,
+        "event_id": "f7e8580a4d5408c58a087ff7a16b440d208d1f59befa332bf055766f053089b7"
+      }
+    }
+  }
+}

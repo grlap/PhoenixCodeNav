@@ -1,0 +1,29 @@
+{
+  "id": "01a07d29-f43f-7123-9b24-050b5cc65708",
+  "external_ref": null,
+  "title": "Reviewer contract permits an Engram ls the delegation policy refuses",
+  "outcome": "/review-code promises reviewer children only the tracker words they can actually use, or states that its dedupe step is best-effort — so no reviewer packet claims a dedupe that never ran.",
+  "acceptance": [
+    "A reviewer delegation either completes the Phase 6 dedupe search successfully, or the command text tells the reviewer that dedupe is unavailable and to record that in Proposed Engram Updates",
+    "No reviewer packet presents a deduplicated proposal when no dedupe search ran"
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "bug",
+  "priority": 2,
+  "labels": [
+    "agent-experience",
+    "review",
+    "testing"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "open",
+  "parent_id": null,
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": null
+}

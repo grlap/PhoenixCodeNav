@@ -1,0 +1,27 @@
+{
+  "id": "01a07070-e0af-7b60-bed2-236f08cac4ae",
+  "external_ref": null,
+  "title": "Reduce F# reference enumeration and sample mapping overhead",
+  "outcome": "F# same-project reference enumeration avoids redundant allocation and indexing work.",
+  "acceptance": [
+    "Reference location keys are computed once and SourceText is constructed at most once per source file without changing any limit."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "task",
+  "priority": 3,
+  "labels": [
+    "performance",
+    "review"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "open",
+  "parent_id": "01a063dd-54f4-7d22-8647-caeefe63e36e",
+  "child_requirement": "optional",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": null
+}

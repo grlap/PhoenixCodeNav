@@ -1,0 +1,66 @@
+{
+  "id": "01a09140-2280-7980-a47b-9a51ebf2bc07",
+  "external_ref": null,
+  "title": "Clarify the stderr wording for an observed retained reconnect fault",
+  "outcome": "A retained connect-task fault observed during shutdown is described as an observed attempt fault, without implying that it originated in cleanup, while preserving the original result and bounded redacted diagnostics.",
+  "acceptance": [
+    "The completed-connect and in-flight-connect diagnostic tests assert clear retained-attempt wording, exactly one emitted diagnostic across repeated DisposeAsync calls, no exception message or path disclosure, and preservation of the caller result and exit status even when the diagnostic writer fails."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "bug",
+  "priority": 3,
+  "labels": [
+    "architecture",
+    "daemon",
+    "mcp-contract",
+    "observability",
+    "review",
+    "testing"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "completed",
+  "parent_id": null,
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": {
+    "summary": "Retained connect fault diagnostic now says connect attempt failed; observed at shutdown. Exact completed/inflight, redaction, once-only and writer-failure assertions pass; disposal diagnostics unchanged. Implemented and full-union reviewed; not committed or pushed.",
+    "completed_at": "2026-09-11T17:18:17.346211100Z",
+    "actor": {
+      "actor_id": "greg/codex",
+      "actor_kind": "agent"
+    }
+  },
+  "activity": {
+    "central": {
+      "1477a828274609e2d714ee5a27a945624c05e25d188c08c02923c10c3daa0dab": {
+        "activity_id": "1477a828274609e2d714ee5a27a945624c05e25d188c08c02923c10c3daa0dab",
+        "task_id": "01a09140-2280-7980-a47b-9a51ebf2bc07",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "greg/codex",
+          "actor_kind": "agent"
+        },
+        "state": "released",
+        "state_revision": 2,
+        "event_id": "62f2dd9290a20828497930eaef8145f51c51ebc4ef5dbe3c64f28db333f06cfa"
+      },
+      "7e9d7a3c5b4d4a79eb9dc0f18203e1b1b3fed3bd8fe6679b6f2f44255226e0fe": {
+        "activity_id": "7e9d7a3c5b4d4a79eb9dc0f18203e1b1b3fed3bd8fe6679b6f2f44255226e0fe",
+        "task_id": "01a09140-2280-7980-a47b-9a51ebf2bc07",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "greg/codex",
+          "actor_kind": "agent"
+        },
+        "state": "finished",
+        "state_revision": 2,
+        "event_id": "886169d4391d36eaec499df5ba2870d23d4285b01aa7db9efd895aacdfe0aa95"
+      }
+    }
+  }
+}

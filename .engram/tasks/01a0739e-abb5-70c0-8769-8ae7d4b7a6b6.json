@@ -1,0 +1,51 @@
+{
+  "id": "01a0739e-abb5-70c0-8769-8ae7d4b7a6b6",
+  "external_ref": null,
+  "title": "Disclose includeTests filtering in exact F# workspace-reference summaries",
+  "outcome": "Filtered F# reference totals remain exact for the requested scope while summaries and group coverage explicitly say test projects were excluded.",
+  "acceptance": [
+    "A public references regression with includeTests=false returns the filtered total and an explicit test-project exclusion in the response contract."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "bug",
+  "priority": 1,
+  "labels": [
+    "mcp-contract",
+    "review",
+    "semantic-correctness"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "completed",
+  "parent_id": "01a063dd-56a1-7692-a1af-0a9651c8c506",
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": {
+    "summary": "F# workspace reference filters now emit filtered test/generated groups and explicit exact-scope summary disclosure.",
+    "completed_at": "2026-09-05T23:03:24.873623600Z",
+    "actor": {
+      "actor_id": "greg/codex",
+      "actor_kind": "agent"
+    }
+  },
+  "activity": {
+    "central": {
+      "02cdaa37409b533e58edc247415c3e12aac7c8a78238dde33b7661a82648c408": {
+        "activity_id": "02cdaa37409b533e58edc247415c3e12aac7c8a78238dde33b7661a82648c408",
+        "task_id": "01a0739e-abb5-70c0-8769-8ae7d4b7a6b6",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "greg/codex",
+          "actor_kind": "agent"
+        },
+        "state": "finished",
+        "state_revision": 2,
+        "event_id": "c76c4e52327ddfbd4cfdbc6eb3ca8cb7439fbb9df0721418c98ce934ac6cb966"
+      }
+    }
+  }
+}

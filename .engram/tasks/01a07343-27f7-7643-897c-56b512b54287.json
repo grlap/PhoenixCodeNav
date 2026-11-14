@@ -1,0 +1,49 @@
+{
+  "id": "01a07343-27f7-7643-897c-56b512b54287",
+  "external_ref": null,
+  "title": "Enlarge the circular hero black hole by 1.5×",
+  "outcome": "Enlarge the circular hero black hole by 1.5×",
+  "acceptance": [
+    "Increase the desktop circular black-hole diameter by 1.5× while retaining its tight gold ring and foreground particles.",
+    "Preserve readable left/right desktop copy and viewport-safe mobile layout, motion controls, simplified content and CLI docs.",
+    "Website verification and focused desktop/mobile rendering checks pass; no staging, commit or push."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "task",
+  "priority": 1,
+  "labels": [],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "completed",
+  "parent_id": null,
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": {
+    "summary": "Enlarged circular black hole 1.5× with readable left/right desktop copy and phone-safe scaling.",
+    "completed_at": "2026-09-05T20:34:00.371222900Z",
+    "actor": {
+      "actor_id": "greg/codex",
+      "actor_kind": "agent"
+    }
+  },
+  "activity": {
+    "central": {
+      "20050e30f17e48609e812ca5c545eef2972d66cbd1d19e8332908b2314790bfb": {
+        "activity_id": "20050e30f17e48609e812ca5c545eef2972d66cbd1d19e8332908b2314790bfb",
+        "task_id": "01a07343-27f7-7643-897c-56b512b54287",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "greg/codex",
+          "actor_kind": "agent"
+        },
+        "state": "finished",
+        "state_revision": 2,
+        "event_id": "e8cbeb011484fde711819c390409582a8b7b632c9bef660178f51f314951ae9f"
+      }
+    }
+  }
+}

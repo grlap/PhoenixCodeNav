@@ -1,0 +1,28 @@
+{
+  "id": "01a073cf-10ae-7fb2-8186-9bde67547ed7",
+  "external_ref": null,
+  "title": "Align F# references agent-facing descriptions with emitted coverage",
+  "outcome": "The references tool description and semantic note describe the declaring-project group, evaluated discovery completeness, and explicit test/generated filtering that the response emits.",
+  "acceptance": [
+    "NavigationTools references Description and semantic.note both name the distinct declaring-project group, discovery completeness fields, and filter disclosure consistently with coverage.scope."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "task",
+  "priority": 3,
+  "labels": [
+    "documentation",
+    "mcp-contract",
+    "review"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "open",
+  "parent_id": null,
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": null
+}

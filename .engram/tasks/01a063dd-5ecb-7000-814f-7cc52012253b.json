@@ -1,0 +1,71 @@
+{
+  "id": "01a063dd-5ecb-7000-814f-7cc52012253b",
+  "external_ref": null,
+  "title": "Add bounded internal telemetry for semantic cold starts",
+  "outcome": "Add bounded internal telemetry for semantic cold starts",
+  "acceptance": [
+    "Add bounded internal telemetry for semantic cold starts is done"
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "task",
+  "priority": 1,
+  "labels": [],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "completed",
+  "parent_id": "01a063dd-5c87-7403-9486-fddc946bf93b",
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": {
+    "summary": "Delivered bounded internal semantic cold-start phase telemetry with truthful C# pipeline scoping, response/semanticOp parity, public contract coverage, RavenDB baseline evidence, and hardened supporting tests.",
+    "completed_at": "2026-09-05T00:03:57.344378600Z",
+    "actor": {
+      "actor_id": "greg/codex",
+      "actor_kind": "agent"
+    }
+  },
+  "activity": {
+    "central": {
+      "beaaef0090809c1e078bc7e71e561df759b2f87d8d8dfd5d8173eccd8c82617c": {
+        "activity_id": "beaaef0090809c1e078bc7e71e561df759b2f87d8d8dfd5d8173eccd8c82617c",
+        "task_id": "01a063dd-5ecb-7000-814f-7cc52012253b",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "fable",
+          "actor_kind": "agent"
+        },
+        "state": "released",
+        "state_revision": 2,
+        "event_id": "d151def8a12279446989b28837ac2eff887da6bd057e8b4a84b4dc13d84abc56"
+      },
+      "cb3ef29def04f05d2161ceafcbbde058743c44c1b9bc43a1ec8dae601cf863fb": {
+        "activity_id": "cb3ef29def04f05d2161ceafcbbde058743c44c1b9bc43a1ec8dae601cf863fb",
+        "task_id": "01a063dd-5ecb-7000-814f-7cc52012253b",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "greg/codex",
+          "actor_kind": "agent"
+        },
+        "state": "started",
+        "state_revision": 1,
+        "event_id": "cb3ef29def04f05d2161ceafcbbde058743c44c1b9bc43a1ec8dae601cf863fb"
+      },
+      "ebd5adc1b4ade530d1abbd7d8c3ff7cc40900268f1a5403642d1cd9b3d39dea4": {
+        "activity_id": "ebd5adc1b4ade530d1abbd7d8c3ff7cc40900268f1a5403642d1cd9b3d39dea4",
+        "task_id": "01a063dd-5ecb-7000-814f-7cc52012253b",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "greg/codex",
+          "actor_kind": "agent"
+        },
+        "state": "finished",
+        "state_revision": 2,
+        "event_id": "b8aa89c09c2e46afe7c4a92f8a0bec0d54b6b36a68215f320314586a16b2fd39"
+      }
+    }
+  }
+}

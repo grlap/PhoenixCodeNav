@@ -1,0 +1,31 @@
+{
+  "id": "01a08941-d4d7-7f83-ab9a-7a7f0bfc2248",
+  "external_ref": null,
+  "title": "Extend consumed-name relevance to the harmless-import skip",
+  "outcome": "An unresolved conditional Directory.Build import cannot be classified harmless when its document writes a property consumed only through live item metadata.",
+  "acceptance": [
+    "A RED regression with HintPath/ReferenceOutputAssembly-only consumption and a late write reached through an unresolved-condition import demonstrates the skipped-input defect; the correction preserves explicit unresolved-condition refusal, while constant-false and genuinely irrelevant imports remain harmless.",
+    "Inventory all THREE relevance consumers: ProcessPropertyGroup group admission, its individual-property assignment filter (currently both share IsReferenceInputProperty), and ContainsDirectoryBuildSemanticFacts used by harmless-import skipping. Factor their common property-relevance decision into one shared predicate while preserving each caller's distinct role; do not duplicate a third agreeing expression.",
+    "Validate focused red/green controls, full gates, and independent review without broad missing-property assumptions; state parser versus public/native evidence explicitly."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "bug",
+  "priority": 3,
+  "labels": [
+    "fsharp",
+    "msbuild",
+    "review",
+    "semantic-correctness"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "open",
+  "parent_id": "01a063dd-5401-7f73-a63d-bea317b25710",
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": null
+}

@@ -1,0 +1,28 @@
+{
+  "id": "01a06e57-a0b3-7140-946e-2c2422ebcd26",
+  "external_ref": null,
+  "title": "Keep semanticColdStart load attribution coherent across multi-stage calls",
+  "outcome": "Load timing is accumulated or phase-scoped consistently when documentationCommentId resolution and the requested semantic operation both publish timing.",
+  "acceptance": [
+    "A documentationCommentId semantic navigation regression proves loadMs remains consistent with the accumulated preparation and metadata attribution."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "bug",
+  "priority": 2,
+  "labels": [
+    "mcp-contract",
+    "review",
+    "semantic"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "open",
+  "parent_id": "01a063dd-5ecb-7000-814f-7cc52012253b",
+  "child_requirement": "optional",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": null
+}

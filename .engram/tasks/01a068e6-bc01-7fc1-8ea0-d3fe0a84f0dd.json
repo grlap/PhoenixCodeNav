@@ -1,0 +1,53 @@
+{
+  "id": "01a068e6-bc01-7fc1-8ea0-d3fe0a84f0dd",
+  "external_ref": null,
+  "title": "Make first-build retry guidance agent-native",
+  "outcome": "index_building responses and shell-agent guidance direct agents to observe progress and retry Phoenix without recommending broad shell search.",
+  "acceptance": [
+    "CLI documentation distinguishes index_building from transport retry envelopes and gives an executable retry policy.",
+    "index_building guidance names the progress fields agents should observe and does not recommend shell fallback."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "task",
+  "priority": 2,
+  "labels": [
+    "agent-experience",
+    "agent-usability",
+    "cli",
+    "mcp-contract"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "completed",
+  "parent_id": "01a06819-d56e-7e42-99e2-d6c75600a4c8",
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": {
+    "summary": "Replaced shell-fallback first-build prose with progress-aware Phoenix retry guidance.",
+    "completed_at": "2026-09-03T20:38:38.382079400Z",
+    "actor": {
+      "actor_id": "termal",
+      "actor_kind": "agent"
+    }
+  },
+  "activity": {
+    "central": {
+      "03616f92debf0d13b0c15bc3a12683e8de1b299c8a3301e55fea34cf901e4945": {
+        "activity_id": "03616f92debf0d13b0c15bc3a12683e8de1b299c8a3301e55fea34cf901e4945",
+        "task_id": "01a068e6-bc01-7fc1-8ea0-d3fe0a84f0dd",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "termal",
+          "actor_kind": "agent"
+        },
+        "state": "finished",
+        "state_revision": 2,
+        "event_id": "96404b8084e3829c649557c13afdfac60c1b9e0f78f0ecf6a49b60374307b703"
+      }
+    }
+  }
+}

@@ -1,0 +1,27 @@
+{
+  "id": "01a07448-1144-7720-ae5c-87ab5abee455",
+  "external_ref": null,
+  "title": "Bound and disclose the keepAssemblyContents F# checker cache",
+  "outcome": "Bound and disclose the keepAssemblyContents F# checker cache",
+  "acceptance": [
+    "The implementations checker cache has an owner-approved memory-pressure or idle eviction policy, and docs/design.md states the memory trade-off."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "task",
+  "priority": 2,
+  "labels": [
+    "performance",
+    "review"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "open",
+  "parent_id": "01a063dd-575c-7d71-917c-0aeafcd5bd73",
+  "child_requirement": "optional",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": null
+}

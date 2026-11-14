@@ -1,0 +1,24 @@
+{
+  "id": "01a06f49-6876-7dd0-ad5f-146fe7d0533e",
+  "external_ref": null,
+  "title": "Hypothesis: GC pauses dominate a large share of compilation preparation wall",
+  "outcome": "Evidence from the 9ce4c26 RavenDB profile: compilationPreparation gcPauseMs 525 of totalMs 1295.9 (40% of wall), processWideCpuMs 4390.6, sampled GC share 17.1%. Test: record the daemon runtime GC configuration (Server vs Workstation, concurrent, ConserveMemory, LOH threshold) and the allocation rate during preparation; evaluate configuration changes on the same command by gcPauseMs and totalMs before touching allocation patterns; no product limit introduced or lowered.",
+  "acceptance": [
+    "Hypothesis: GC pauses dominate a large share of compilation preparation wall is done"
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "research",
+  "priority": 1,
+  "labels": [],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "open",
+  "parent_id": "01a063dd-5e2a-7431-bd00-c1d34e0ba396",
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": null
+}

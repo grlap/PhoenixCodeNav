@@ -1,0 +1,54 @@
+{
+  "id": "01a088a9-4809-7351-9804-5a2f54ca449e",
+  "external_ref": null,
+  "title": "Preserve configured FSharpTargetsPath import refusal during path-provenance expansion",
+  "outcome": "Preserve configured FSharpTargetsPath import refusal during path-provenance expansion",
+  "acceptance": [
+    "UnsupportedProjectConstructsFailClosedWithStableCauses custom FSharpTargetsPath row passes: configured ../Build/Custom.targets remains fsharp_semantic_import_unsupported."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "bug",
+  "priority": 1,
+  "labels": [
+    "architecture",
+    "csharp",
+    "fsharp",
+    "msbuild",
+    "review",
+    "semantic-correctness"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "completed",
+  "parent_id": "01a088a3-85e9-7332-9901-490befc32433",
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": {
+    "summary": "Configured custom FSharpTargetsPath refusal restored, regressions green, both original reviewers verified.",
+    "completed_at": "2026-09-10T00:47:20.836330Z",
+    "actor": {
+      "actor_id": "greg/codex",
+      "actor_kind": "agent"
+    }
+  },
+  "activity": {
+    "central": {
+      "e6cb87524ebc0faa7fb7579ebee221680d74d70fccedcf7b27ff1029808435b2": {
+        "activity_id": "e6cb87524ebc0faa7fb7579ebee221680d74d70fccedcf7b27ff1029808435b2",
+        "task_id": "01a088a9-4809-7351-9804-5a2f54ca449e",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "greg/codex",
+          "actor_kind": "agent"
+        },
+        "state": "finished",
+        "state_revision": 2,
+        "event_id": "1d814a0cd8074a2220c8133ecdc5d4afd126c73626dc234e20d1efd323fd314b"
+      }
+    }
+  }
+}

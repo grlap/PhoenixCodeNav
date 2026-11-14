@@ -1,0 +1,64 @@
+{
+  "id": "01a0747d-9aba-7682-b84e-0a1e034c87b9",
+  "external_ref": null,
+  "title": "Add scripts/gate-summary.ps1: run the check-in gates and print only counts plus complete failure text",
+  "outcome": "One command runs build, the full test suite, the external MCP harness and the website verifier, and prints a compact machine-terse summary: per-project passed/failed/skipped counts, the complete message and stack of every failing test or harness case (bounded per test with an explicit omitted-line count, never silently cut), skipped names with reasons, the TRX path, and a one-line verdict with a matching exit code; a green run stays around 4 KB so implementer context is not spent on logs.",
+  "acceptance": [
+    "CLAUDE.md Build & Test documents the script as the standard way to run the gates; the raw commands remain listed",
+    "No product limit is introduced or changed and no tests are written for the script (owner rule: no tests of infrastructure, build targets, scripts, or repository policy files)",
+    "pwsh -NoProfile -File ./scripts/gate-summary.ps1 runs dotnet build (0 warnings check, warnings printed in full), dotnet test on the solution with quiet console verbosity and a TRX logger (existing xunit parallelism caps respected), scripts/test-roslyn-mcp.ps1, and node ./website/verify.mjs; prints per-project counts, every failing test/case with its complete failure text and explicit omitted-line counts, skipped tests with reasons, the TRX path, and GATES GREEN or GATES RED with a non-zero exit code on any failure; a green run prints roughly 4 KB or less"
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "task",
+  "priority": 1,
+  "labels": [
+    "agent-experience",
+    "tooling"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "completed",
+  "parent_id": null,
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": {
+    "summary": "Delivered and committed scripts/gate-summary.ps1 plus matching CLAUDE.md gate documentation in 8a0ede51693945c528117d1b57dfd3662e341385.",
+    "completed_at": "2026-09-06T05:07:23.163769300Z",
+    "actor": {
+      "actor_id": "greg/codex",
+      "actor_kind": "agent"
+    }
+  },
+  "activity": {
+    "central": {
+      "890c4ca9016fcfea31cd89ac3555670717c18fa2b678e0cfa6d3601addfe5b48": {
+        "activity_id": "890c4ca9016fcfea31cd89ac3555670717c18fa2b678e0cfa6d3601addfe5b48",
+        "task_id": "01a0747d-9aba-7682-b84e-0a1e034c87b9",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "greg/codex",
+          "actor_kind": "agent"
+        },
+        "state": "started",
+        "state_revision": 1,
+        "event_id": "890c4ca9016fcfea31cd89ac3555670717c18fa2b678e0cfa6d3601addfe5b48"
+      },
+      "b9657c2a23d438c61c6bd2ebab433752b0f7ef38a85acd22fc26e50e87d36d1a": {
+        "activity_id": "b9657c2a23d438c61c6bd2ebab433752b0f7ef38a85acd22fc26e50e87d36d1a",
+        "task_id": "01a0747d-9aba-7682-b84e-0a1e034c87b9",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "greg/codex",
+          "actor_kind": "agent"
+        },
+        "state": "finished",
+        "state_revision": 2,
+        "event_id": "b38460bdaab32c0cf6524b31072531a22564c815834cac1c90850be27ce49dfa"
+      }
+    }
+  }
+}

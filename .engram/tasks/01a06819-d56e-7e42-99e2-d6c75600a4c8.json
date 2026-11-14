@@ -1,0 +1,68 @@
+{
+  "id": "01a06819-d56e-7e42-99e2-d6c75600a4c8",
+  "external_ref": null,
+  "title": "Expose the Phoenix MCP tool surface as an agent-first CLI",
+  "outcome": "Shell-capable agents can discover and invoke every Phoenix tool through the existing executable while reusing the shared daemon and receiving the unchanged structured MCP JSON contract.",
+  "acceptance": [
+    "Arguments derive from live MCP input schemas and support direct scalar flags, a complete JSON object, and file or stdin JSON input without aliases.",
+    "CLI invocations connect through the existing shared-daemon election path and never start a standalone writer or fallback topology.",
+    "Product tests decisively cover discovery, schema/help, success, domain error, local and server bad_request, unavailable daemon, JSON-only stdout, and two calls sharing one daemon.",
+    "README and agent documentation describe the CLI; BuildInfo.Version and features[] expose the new capability; all repository quality and adversarial review gates pass.",
+    "The same Phoenix executable supports tools, help, schema, and exact MCP tool-name invocation without duplicating navigation business logic.",
+    "stdout contains exactly one newline-terminated JSON document; deterministic exit codes distinguish success or partial, domain error, bad input, daemon unavailable, and interruption."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "feature",
+  "priority": 1,
+  "labels": [
+    "agent-experience",
+    "cli",
+    "mcp-contract"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "completed",
+  "parent_id": null,
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": {
+    "summary": "Shipped the agent-first Phoenix CLI in commit eee9ee5 and published the win-x64 self-contained single-file executable at artifacts/win-x64/PhoenixCodeNav.Mcp.exe.",
+    "completed_at": "2026-09-03T21:35:14.769872200Z",
+    "actor": {
+      "actor_id": "termal",
+      "actor_kind": "agent"
+    }
+  },
+  "activity": {
+    "central": {
+      "42fb906d20426156e788d5c19391c1304b5c9393a4113bcab99838f45ab4058c": {
+        "activity_id": "42fb906d20426156e788d5c19391c1304b5c9393a4113bcab99838f45ab4058c",
+        "task_id": "01a06819-d56e-7e42-99e2-d6c75600a4c8",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "termal",
+          "actor_kind": "agent"
+        },
+        "state": "finished",
+        "state_revision": 2,
+        "event_id": "4575eaf12eb819597de55a8bb6b3e4e537d9727098ae05e3421e4aac3cc5e64a"
+      },
+      "c5b683d26b6a81ee3fc2212d6199ccc97ed17bcf4f66b307ace78e16b00ed560": {
+        "activity_id": "c5b683d26b6a81ee3fc2212d6199ccc97ed17bcf4f66b307ace78e16b00ed560",
+        "task_id": "01a06819-d56e-7e42-99e2-d6c75600a4c8",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "termal",
+          "actor_kind": "agent"
+        },
+        "state": "started",
+        "state_revision": 1,
+        "event_id": "c5b683d26b6a81ee3fc2212d6199ccc97ed17bcf4f66b307ace78e16b00ed560"
+      }
+    }
+  }
+}

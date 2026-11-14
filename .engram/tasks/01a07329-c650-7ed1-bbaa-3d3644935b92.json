@@ -1,0 +1,28 @@
+{
+  "id": "01a07329-c650-7ed1-bbaa-3d3644935b92",
+  "external_ref": null,
+  "title": "Keep the hero pause control above overlapping details",
+  "outcome": "The hero animation pause control remains pointer-accessible at narrow desktop widths.",
+  "acceptance": [
+    "The pause control stays above the hero details overlap or the orbit inset prevents details from covering its hit target."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "bug",
+  "priority": 3,
+  "labels": [
+    "performance",
+    "review",
+    "website"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "open",
+  "parent_id": null,
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": null
+}

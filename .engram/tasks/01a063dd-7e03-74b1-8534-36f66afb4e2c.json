@@ -1,0 +1,45 @@
+{
+  "id": "01a063dd-7e03-74b1-8534-36f66afb4e2c",
+  "external_ref": null,
+  "title": "Remove remaining tracker work references from documentation",
+  "outcome": "Documentation complies with the repository rule against embedding tracker work references in prose.",
+  "acceptance": [
+    "A repository documentation search finds no remaining tracker work-reference prose unless explicitly owner-approved",
+    "docs/features/telemetry.md has no epuc.N work references in its heading",
+    "docs/internal-operations-portal.md has no PhoenixCodeNav-epuc work reference"
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "task",
+  "priority": 3,
+  "labels": [
+    "architecture",
+    "review"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "open",
+  "parent_id": "01a063dd-7b2f-78e2-b2cc-385fd932b308",
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": null,
+  "activity": {
+    "central": {
+      "5ffebead02f15c4e1ee27ddd77fca01aa67a8c438fc4b68a412002f7ea1e7703": {
+        "activity_id": "5ffebead02f15c4e1ee27ddd77fca01aa67a8c438fc4b68a412002f7ea1e7703",
+        "task_id": "01a063dd-7e03-74b1-8534-36f66afb4e2c",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "fable",
+          "actor_kind": "agent"
+        },
+        "state": "released",
+        "state_revision": 2,
+        "event_id": "5d5ebad5e9f8114778a9d54ce4c4b93124b04e8f7aa6aab78bde183b79289727"
+      }
+    }
+  }
+}

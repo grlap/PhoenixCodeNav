@@ -1,0 +1,54 @@
+{
+  "id": "01a06910-3a92-7403-89b1-b86b9274ca7f",
+  "external_ref": null,
+  "title": "Single-source Phoenix CLI registrations and discovery budget invariants",
+  "outcome": "CLI preflight and execution share one process-local registration set, and tests fail if complete discovery exceeds the established hard response budget.",
+  "acceptance": [
+    "IsKnownTool and RunAsync reuse one lazy registration list.",
+    "The tools document and every help document stay within Json.HardBudgetBytes in tests."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "task",
+  "priority": 2,
+  "labels": [
+    "agent-experience",
+    "cli",
+    "mcp-contract",
+    "review",
+    "testing"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "completed",
+  "parent_id": "01a06819-d56e-7e42-99e2-d6c75600a4c8",
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": {
+    "summary": "CLI registration discovery is process-local and single-sourced, with complete discovery budget invariants.",
+    "completed_at": "2026-09-03T21:15:58.962613500Z",
+    "actor": {
+      "actor_id": "termal",
+      "actor_kind": "agent"
+    }
+  },
+  "activity": {
+    "central": {
+      "c4b847640c4c8e630a108474cadadc17b45672d5ac9ae33a40a199a52ca8a4ee": {
+        "activity_id": "c4b847640c4c8e630a108474cadadc17b45672d5ac9ae33a40a199a52ca8a4ee",
+        "task_id": "01a06910-3a92-7403-89b1-b86b9274ca7f",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "termal",
+          "actor_kind": "agent"
+        },
+        "state": "finished",
+        "state_revision": 2,
+        "event_id": "f63be24b302862438d9bb814c4c7eca512b678f6768f20d53337d5bcdcc3ea71"
+      }
+    }
+  }
+}

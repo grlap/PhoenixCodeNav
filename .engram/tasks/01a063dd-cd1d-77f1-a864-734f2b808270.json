@@ -1,0 +1,47 @@
+{
+  "id": "01a063dd-cd1d-77f1-a864-734f2b808270",
+  "external_ref": null,
+  "title": "Clarify default capabilities compaction semantics",
+  "outcome": "Consumers can distinguish intentional default ID-only capability discovery from summaries removed because the hard byte budget was reached.",
+  "acceptance": [
+    "Existing compact and detail product contracts remain green.",
+    "The capabilities-hard-budget feature summary documents that featuresCompacted=true also represents intentional default ID-only mode and names featureSummaryMode as the discriminator."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "task",
+  "priority": 2,
+  "labels": [
+    "agent-experience",
+    "documentation",
+    "mcp-contract",
+    "performance",
+    "review"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "open",
+  "parent_id": "01a063dd-6adb-72a0-849c-9f418dc73e0b",
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": null,
+  "activity": {
+    "central": {
+      "4f6661961ed41900b57ff87e4a4b16bab2bd6ab0bf62518a261c74a71516f685": {
+        "activity_id": "4f6661961ed41900b57ff87e4a4b16bab2bd6ab0bf62518a261c74a71516f685",
+        "task_id": "01a063dd-cd1d-77f1-a864-734f2b808270",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "fable",
+          "actor_kind": "agent"
+        },
+        "state": "released",
+        "state_revision": 2,
+        "event_id": "047d29d1f350a92196a433ecd8a4fbd9c54513e4a73be6ed6b680b7400c121a4"
+      }
+    }
+  }
+}

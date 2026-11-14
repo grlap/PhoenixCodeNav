@@ -1,0 +1,28 @@
+{
+  "id": "01a06f15-a77c-7bc0-a61b-bd68487ba907",
+  "external_ref": null,
+  "title": "Strengthen compilation-preparation GC-pause delta regression coverage",
+  "outcome": "A deterministic, non-flaky regression distinguishes the bracketed GC-pause delta from a constant or process-lifetime value, or records why runtime GC counters cannot provide such deterministic control.",
+  "acceptance": [
+    "test coverage or an explicit testability rationale addresses bracket-delta discrimination without timing or forced-GC thresholds"
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "task",
+  "priority": 3,
+  "labels": [
+    "review",
+    "semantic",
+    "testing"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "open",
+  "parent_id": "01a063dd-6110-7153-9100-418276aea485",
+  "child_requirement": "optional",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": null
+}

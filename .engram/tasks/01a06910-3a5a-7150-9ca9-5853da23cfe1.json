@@ -1,0 +1,53 @@
+{
+  "id": "01a06910-3a5a-7150-9ca9-5853da23cfe1",
+  "external_ref": null,
+  "title": "Commit Phoenix CLI output only after daemon teardown",
+  "outcome": "A completed Phoenix CLI result is selected before quiet teardown and written exactly once after client and stream disposal.",
+  "acceptance": [
+    "A throwing DisposeAsync cannot replace a decisive result or append a second JSON document.",
+    "Focused regression coverage proves quiet disposal preserves the selected result and exit code."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "bug",
+  "priority": 1,
+  "labels": [
+    "agent-experience",
+    "cli",
+    "mcp-contract",
+    "review"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "completed",
+  "parent_id": "01a06819-d56e-7e42-99e2-d6c75600a4c8",
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": {
+    "summary": "CLI selects a decisive payload/exit before quiet daemon-client and stream teardown, then performs the sole stdout write.",
+    "completed_at": "2026-09-03T21:15:58.889231900Z",
+    "actor": {
+      "actor_id": "termal",
+      "actor_kind": "agent"
+    }
+  },
+  "activity": {
+    "central": {
+      "bf9b9d14aa3ef29e8518f79e29d6ae270878229021277ae1f0978906b9d56e72": {
+        "activity_id": "bf9b9d14aa3ef29e8518f79e29d6ae270878229021277ae1f0978906b9d56e72",
+        "task_id": "01a06910-3a5a-7150-9ca9-5853da23cfe1",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "termal",
+          "actor_kind": "agent"
+        },
+        "state": "finished",
+        "state_revision": 2,
+        "event_id": "e4840f77bfcf717deadb4d7949086fb44898b7fd3e390214b418e25dce524483"
+      }
+    }
+  }
+}

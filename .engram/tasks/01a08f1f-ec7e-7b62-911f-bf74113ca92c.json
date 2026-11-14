@@ -1,0 +1,52 @@
+{
+  "id": "01a08f1f-ec7e-7b62-911f-bf74113ca92c",
+  "external_ref": null,
+  "title": "Centralize daemon cause declarations so future emitters require an explicit recovery policy",
+  "outcome": "Adding a production daemon failure cannot silently bypass an explicit in-session recovery decision.",
+  "acceptance": [
+    "A shared named cause/policy declaration and product-level contract coverage require an explicit recovery decision for every relevant production emitter without source-grep tests; unknown external causes still fail closed and retry advice remains independent."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "task",
+  "priority": 3,
+  "labels": [
+    "architecture",
+    "daemon",
+    "review",
+    "testing"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "completed",
+  "parent_id": null,
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": {
+    "summary": "Typed local cause and handshake construction closed; exhaustive catalog and API-shape regressions retain unknown-wire compatibility and independent retry advice. Full gates passed and fresh dual25-path review complete; no remaining guard finding.",
+    "completed_at": "2026-09-11T08:07:11.991259600Z",
+    "actor": {
+      "actor_id": "greg/codex",
+      "actor_kind": "agent"
+    }
+  },
+  "activity": {
+    "central": {
+      "f09651bc125f0d61054c2adc7f98acd9b84e5dce477c6c88de858b28b0cb47e4": {
+        "activity_id": "f09651bc125f0d61054c2adc7f98acd9b84e5dce477c6c88de858b28b0cb47e4",
+        "task_id": "01a08f1f-ec7e-7b62-911f-bf74113ca92c",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "greg/codex",
+          "actor_kind": "agent"
+        },
+        "state": "finished",
+        "state_revision": 2,
+        "event_id": "95fe3a5a5a74656c3dab4df5de0d3e06ddf9a9d1b9f78478d7bf0a81bd56ecaa"
+      }
+    }
+  }
+}

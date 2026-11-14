@@ -1,0 +1,30 @@
+{
+  "id": "01a08faf-e122-7320-aebe-326f3172d588",
+  "external_ref": null,
+  "title": "Classify SDK transport-not-connected InvalidOperationException in daemon session recovery",
+  "outcome": "A disconnected SDK session cannot remain established merely because its failure is surfaced as InvalidOperationException; unrelated request errors are not misclassified.",
+  "acceptance": [
+    "First verify the documented disconnected-SDK path, then add decisive request and cancellation-forwarding regressions that distinguish completed/disconnected-session InvalidOperationException from unrelated InvalidOperationException. Observed connection loss invalidates only the matching connection, preserves typed uncertain outcome or caller cancellation, and allows later recovery without replay."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "bug",
+  "priority": 3,
+  "labels": [
+    "daemon",
+    "mcp-contract",
+    "performance",
+    "review",
+    "testing"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "superseded",
+  "parent_id": "01a08f80-1589-7da1-bf95-4a910f482d1c",
+  "child_requirement": "optional",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": "01a08fb0-9f1a-7453-8d58-8480dd461269",
+  "disposal_reason": "Continue as independent P3 follow-up after completed shutdown fix w-4a910f482d1c. The review finding is non-blocking and its original review/parent evidence remains in the notes; no implementation has been attempted.",
+  "completion": null
+}

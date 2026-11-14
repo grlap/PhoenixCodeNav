@@ -1,0 +1,53 @@
+{
+  "id": "01a07a7f-8838-7651-bad4-68554f8e21f1",
+  "external_ref": null,
+  "title": "Restore decisive workspace-root proof in the live watcher ShutdownAsync regression",
+  "outcome": "Restore decisive workspace-root proof in the live watcher ShutdownAsync regression",
+  "acceptance": [
+    "ShutdownAsyncReleasesLiveWatcherBeforeWorkspaceDeletion again fails if the native workspace watcher handle is not disposed.",
+    "The focused Batch41 tests and full quality gates pass."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "bug",
+  "priority": 1,
+  "labels": [
+    "index-freshness",
+    "infrastructure",
+    "review",
+    "testing"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "completed",
+  "parent_id": "01a078ae-bdca-7b30-a846-3887ea1da0de",
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": {
+    "summary": "Restored decisive workspace-root release proof in ShutdownAsyncReleasesLiveWatcherBeforeWorkspaceDeletion: the test keeps its strict index-directory assertion and then strict-deletes/asserts the plain non-Git workspace root. Applied the same rule-v2 root proof to the four named non-Git lifecycle peers.",
+    "completed_at": "2026-09-07T06:23:49.931832100Z",
+    "actor": {
+      "actor_id": "greg/codex",
+      "actor_kind": "agent"
+    }
+  },
+  "activity": {
+    "central": {
+      "1c9eca11b8b4d32917e944172f0483a10714010d717cfefd03be3506054fb849": {
+        "activity_id": "1c9eca11b8b4d32917e944172f0483a10714010d717cfefd03be3506054fb849",
+        "task_id": "01a07a7f-8838-7651-bad4-68554f8e21f1",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "greg/codex",
+          "actor_kind": "agent"
+        },
+        "state": "finished",
+        "state_revision": 2,
+        "event_id": "0ba151d7e8a1ee7c886ff7f4a4f567a8b89f2720a13d77ed311a53db64813223"
+      }
+    }
+  }
+}

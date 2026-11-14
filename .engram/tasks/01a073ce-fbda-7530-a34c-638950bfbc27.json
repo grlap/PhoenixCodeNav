@@ -1,0 +1,28 @@
+{
+  "id": "01a073ce-fbda-7530-a34c-638950bfbc27",
+  "external_ref": null,
+  "title": "Budget F# reference discovery-failure details without discarding partial results",
+  "outcome": "F# reference discovery failure details remain within the response budget while successful lower-bound counts and aggregate failure reasons stay available.",
+  "acceptance": [
+    "A workspace with many unevaluatable F# projects returns a bounded discoveryFailed sample with selected/returned/omitted coverage and a stable omission reason.",
+    "The response remains within Json.HardBudgetBytes and does not fall back to the unrelated FCS reference-identity overflow message."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "bug",
+  "priority": 2,
+  "labels": [
+    "mcp-contract",
+    "review"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "open",
+  "parent_id": null,
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": null
+}

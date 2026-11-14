@@ -1,0 +1,32 @@
+{
+  "id": "01a082b1-b180-7691-a232-299f8771e9af",
+  "external_ref": null,
+  "title": "Make the bounded evaluator the single PropertyReference authority",
+  "outcome": "The parser and bounded evaluator cannot drift in how they recognize simple property references.",
+  "acceptance": [
+    "Exactly one PropertyReference regex authority remains under src/, including canonical self-default recognition."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "task",
+  "priority": 2,
+  "labels": [
+    "architecture",
+    "csharp",
+    "fsharp",
+    "msbuild",
+    "review",
+    "semantic",
+    "semantic-correctness"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "open",
+  "parent_id": "01a08298-8f83-78d0-8c70-d2a2cb8c99dc",
+  "child_requirement": "optional",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": null
+}

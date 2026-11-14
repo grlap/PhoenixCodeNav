@@ -1,0 +1,52 @@
+{
+  "id": "01a08976-b0f6-7c30-a489-74bbf23b3ba8",
+  "external_ref": null,
+  "title": "Add local MSBuild evaluation diagnostics beside telemetry",
+  "outcome": "Add local MSBuild evaluation diagnostics beside telemetry",
+  "acceptance": [
+    "Diagnostics are wired to real F# semantic evaluation and shared expression evaluation, stay out of stdout/MCP and privacy-safe telemetry/portal, and failures of diagnostic output do not change semantic results.",
+    "Focused diagnostic/regression tests and complete Release/format/suite/external MCP/website gates pass; both required reviewers complete before any separately authorized commit.",
+    "Opt-in local diagnostic JSONL beside telemetry identifies project/document, original and assumed-empty retry, exact property/self-property names, lookup/completeness decisions and final import/evaluation result without changing evaluator outputs."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "feature",
+  "priority": 2,
+  "labels": [
+    "diagnostics",
+    "msbuild"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "completed",
+  "parent_id": "01a063dd-5401-7f73-a63d-bea317b25710",
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": {
+    "summary": "Committed and pushed the reviewed diagnostics-only v0.12.104 changeset as 13715bee317062c9b54bb47805d417bee7d00b7e (parent06c15fc), Add opt-in local MSBuild evaluation diagnostics. Exact13-path union, including both new files;584 insertions/19 deletions. Greg explicitly confirmed commit and push in this session. Normal push completed; ls-remote verified refs/heads/main equals local HEAD and origin/main; working tree clean. Governing final gate: format clean, Release0 warnings/errors,2026 passed/0 failed plus2 disclosed Unix-only skips, MCP47/0, website167. Both original dual reviewers completed CLEAN, no Critical/High; four optional Medium/Low followups remain open. Schema41 and C# unchanged. This delivers local logging, not an established fix for the monolith symptom. Per-changeset push authorization is consumed; separate simpler-F# pilot remains unstarted.",
+    "completed_at": "2026-09-10T04:53:57.479489100Z",
+    "actor": {
+      "actor_id": "greg/codex",
+      "actor_kind": "agent"
+    }
+  },
+  "activity": {
+    "central": {
+      "1198a13d49208c8597688a64492dab15f1f996fab224a8d6a4fd0ed8f0a31e62": {
+        "activity_id": "1198a13d49208c8597688a64492dab15f1f996fab224a8d6a4fd0ed8f0a31e62",
+        "task_id": "01a08976-b0f6-7c30-a489-74bbf23b3ba8",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "greg/codex",
+          "actor_kind": "agent"
+        },
+        "state": "finished",
+        "state_revision": 2,
+        "event_id": "3d754273d7de14efdbe0e25139c235a6cadcc0647450621afc7896af6e844197"
+      }
+    }
+  }
+}

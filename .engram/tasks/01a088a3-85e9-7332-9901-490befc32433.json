@@ -1,0 +1,54 @@
+{
+  "id": "01a088a3-85e9-7332-9901-490befc32433",
+  "external_ref": null,
+  "title": "Preserve authored MSBuild separators after absolute path-property expansion on Unix",
+  "outcome": "Preserve authored MSBuild separators after absolute path-property expansion on Unix",
+  "acceptance": [
+    "Unix native product regressions pass for mixed authored/native separators across Import, Compile, ProjectReference, HintPath and Exists, eager property capture, and cold/delta/pinned probe identities; full gates and same-reviewer verification resolve the High."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "bug",
+  "priority": 1,
+  "labels": [
+    "architecture",
+    "csharp",
+    "fsharp",
+    "msbuild",
+    "review",
+    "semantic-correctness"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "completed",
+  "parent_id": "01a08871-6a84-7aa1-9265-c202f2be4cd9",
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": {
+    "summary": "Unix authored/native separator provenance corrected across all five consumers; required custom-target regression fixed; native RED/GREEN, complete gates and both original reviewers verified.",
+    "completed_at": "2026-09-10T00:47:20.929879600Z",
+    "actor": {
+      "actor_id": "greg/codex",
+      "actor_kind": "agent"
+    }
+  },
+  "activity": {
+    "central": {
+      "12ad877549a8892a091f1da50c3fbea6e5bb066a2b0f505287a3be94f6eed465": {
+        "activity_id": "12ad877549a8892a091f1da50c3fbea6e5bb066a2b0f505287a3be94f6eed465",
+        "task_id": "01a088a3-85e9-7332-9901-490befc32433",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "greg/codex",
+          "actor_kind": "agent"
+        },
+        "state": "finished",
+        "state_revision": 2,
+        "event_id": "0d0aac0f2e1471a365a6b7527f835af8aa875db75f67057480ac0846cdba200f"
+      }
+    }
+  }
+}

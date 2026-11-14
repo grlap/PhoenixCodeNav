@@ -1,0 +1,66 @@
+{
+  "id": "01a063dd-84ee-78b2-be90-a2b82477e5de",
+  "external_ref": null,
+  "title": "Standardize zero-hit recovery and project selectors",
+  "outcome": "Agents can address projects using natural identifiers and every project or symbol miss returns a bounded, actionable retry path without silent substitution.",
+  "acceptance": [
+    "No suggested project or symbol is selected implicitly.",
+    "Project and symbol misses return a stable reason, effective scope, coverage, bounded ranked suggestions with rationale, and a concrete retry template.",
+    "Project selectors accept project name, assembly name, and project-file path.",
+    "The capability is represented by its own features[] identifier and BuildInfo.Version is bumped."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "feature",
+  "priority": 2,
+  "labels": [
+    "agent-experience",
+    "mcp-contract",
+    "navigation"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "completed",
+  "parent_id": null,
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": {
+    "summary": "Completed standardized zero-hit recovery and project-selector behavior.",
+    "completed_at": "2026-09-04T17:08:40.072879700Z",
+    "actor": {
+      "actor_id": "greg/codex",
+      "actor_kind": "agent"
+    }
+  },
+  "activity": {
+    "central": {
+      "2553abb102313cdcc0f82ce893e4d9dd1e68e0184ee7f317127b873b095449af": {
+        "activity_id": "2553abb102313cdcc0f82ce893e4d9dd1e68e0184ee7f317127b873b095449af",
+        "task_id": "01a063dd-84ee-78b2-be90-a2b82477e5de",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "greg/codex",
+          "actor_kind": "agent"
+        },
+        "state": "finished",
+        "state_revision": 2,
+        "event_id": "fa70eaf1091cb4361eafd0b320271eb72f52d88033c3132ff124e719f41feb1d"
+      },
+      "bf74ae05239b1b5ac4f85979a9a1ab33fd458849b44b1f1bb39575efd321d36f": {
+        "activity_id": "bf74ae05239b1b5ac4f85979a9a1ab33fd458849b44b1f1bb39575efd321d36f",
+        "task_id": "01a063dd-84ee-78b2-be90-a2b82477e5de",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "fable",
+          "actor_kind": "agent"
+        },
+        "state": "released",
+        "state_revision": 2,
+        "event_id": "b4ed756c7b6e3c5f87f2b948ba2f222d3a968a9b8b1e8bbc1e526c2c82482c65"
+      }
+    }
+  }
+}

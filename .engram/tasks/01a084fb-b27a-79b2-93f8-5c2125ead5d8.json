@@ -1,0 +1,51 @@
+{
+  "id": "01a084fb-b27a-79b2-93f8-5c2125ead5d8",
+  "external_ref": null,
+  "title": "Disclose assumed F# context and clarify conditional overrides",
+  "outcome": "Disclose assumed F# context and clarify conditional overrides",
+  "acceptance": [
+    "Effective assumed context is disclosed and conditional versus unconditional override policy is explicit."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "bug",
+  "priority": 2,
+  "labels": [
+    "fsharp",
+    "review",
+    "semantic-correctness"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "completed",
+  "parent_id": null,
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": {
+    "summary": ".97 emits initial-context provenance in MCP and explicitly documents ordinary overrides versus populated self-empty guards. Codex6496 and Claude6497 CLEAN verify disclosure contract; consumption granularity remains a distinct deferred Medium w-04aa4202d095.",
+    "completed_at": "2026-09-09T07:04:57.582819200Z",
+    "actor": {
+      "actor_id": "greg/codex",
+      "actor_kind": "agent"
+    }
+  },
+  "activity": {
+    "central": {
+      "49e6847358e3412e61169a73a163316054892e664e8dbbaaee83e34bb28a1375": {
+        "activity_id": "49e6847358e3412e61169a73a163316054892e664e8dbbaaee83e34bb28a1375",
+        "task_id": "01a084fb-b27a-79b2-93f8-5c2125ead5d8",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "greg/codex",
+          "actor_kind": "agent"
+        },
+        "state": "finished",
+        "state_revision": 2,
+        "event_id": "9058c9750fbc02e63e098a70b82369144eceaf6ada4dd30fbaaec57a7f119b83"
+      }
+    }
+  }
+}

@@ -1,0 +1,27 @@
+{
+  "id": "01a07e87-ff49-7113-87f9-d1ed3b459d85",
+  "external_ref": null,
+  "title": "Replace the Roslyn handoff document's transient delivery status with stable recipient instructions",
+  "outcome": "Replace the Roslyn handoff document's transient delivery status with stable recipient instructions",
+  "acceptance": [
+    "The closing handoff paragraph describes stable retrieval instructions rather than claiming the document remains uncommitted; actual commit/ref and remote availability are supplied by the handoff message."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "task",
+  "priority": 2,
+  "labels": [
+    "documentation",
+    "review"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "open",
+  "parent_id": null,
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": null
+}

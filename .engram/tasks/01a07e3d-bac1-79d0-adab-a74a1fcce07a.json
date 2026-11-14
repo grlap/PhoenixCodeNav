@@ -1,0 +1,52 @@
+{
+  "id": "01a07e3d-bac1-79d0-adab-a74a1fcce07a",
+  "external_ref": null,
+  "title": "Prepare the macOS Roslyn SQLite cache repair handoff",
+  "outcome": "Prepare the macOS Roslyn SQLite cache repair handoff",
+  "acceptance": [
+    "Consult Fable and update the investigation document with agreed repair phases, boundaries, actual runtime verification, decisive test criteria, existing-work links in tracker, and macOS handoff readiness.",
+    "Record validation and delivery state honestly; no product implementation, commit or push without separate authority."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "task",
+  "priority": 1,
+  "labels": [
+    "documentation",
+    "macos",
+    "roslyn"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "completed",
+  "parent_id": null,
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": {
+    "summary": "Prepared and checked in the reviewed macOS Roslyn investigation handoff document as cf7ce153bd45d83f8eb807e153a8519976552d5b; no product implementation and no push.",
+    "completed_at": "2026-09-08T01:13:17.736530300Z",
+    "actor": {
+      "actor_id": "greg/codex",
+      "actor_kind": "agent"
+    }
+  },
+  "activity": {
+    "central": {
+      "36255c289c8784f5830cfe7a217f62556667b2d5f60d5123d9785e31e791b013": {
+        "activity_id": "36255c289c8784f5830cfe7a217f62556667b2d5f60d5123d9785e31e791b013",
+        "task_id": "01a07e3d-bac1-79d0-adab-a74a1fcce07a",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "greg/codex",
+          "actor_kind": "agent"
+        },
+        "state": "finished",
+        "state_revision": 2,
+        "event_id": "204fd557cc8c96253ef5e5fe8403fc1a557c7f6dbfb48d4311ad8bd7f6571a71"
+      }
+    }
+  }
+}

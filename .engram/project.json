@@ -1,0 +1,16 @@
+{
+  "project": {
+    "format": "engram-task-planning-v1",
+    "project_id": "github.com/grlap/PhoenixCodeNav"
+  },
+  "profile": {
+    "include_notes": false,
+    "origin_machine": "central"
+  },
+  "folder_exchange": {
+    "complete": true,
+    "export_basis": {
+      "inventory_fingerprint": "51c113247689b3fc0b84bebc43aecc05341a2844863cfa8e6934f28ab5f63e82"
+    }
+  }
+}

@@ -1,0 +1,50 @@
+{
+  "id": "01a07439-39af-75c3-8df0-47b433f6698d",
+  "external_ref": null,
+  "title": "Find F# implementations hidden by signature files",
+  "outcome": "Find F# implementations hidden by signature files",
+  "acceptance": [
+    "Signature-hidden named type and override implementations are returned with truthful complete coverage."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "bug",
+  "priority": 1,
+  "labels": [
+    "review",
+    "semantic-correctness"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "completed",
+  "parent_id": "01a063dd-575c-7d71-917c-0aeafcd5bd73",
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": {
+    "summary": "Signature-hidden F# named implementers and overrides are now discovered from typed implementation declarations.",
+    "completed_at": "2026-09-06T01:24:51.705068500Z",
+    "actor": {
+      "actor_id": "greg/codex",
+      "actor_kind": "agent"
+    }
+  },
+  "activity": {
+    "central": {
+      "c7226fe7010b7dcd05818ae52a59eec7efb97a75397f403b74b7548272f7fd43": {
+        "activity_id": "c7226fe7010b7dcd05818ae52a59eec7efb97a75397f403b74b7548272f7fd43",
+        "task_id": "01a07439-39af-75c3-8df0-47b433f6698d",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "greg/codex",
+          "actor_kind": "agent"
+        },
+        "state": "finished",
+        "state_revision": 2,
+        "event_id": "c14952ec89fc6853c8cf2faac1d877ce01937c4a05d7505c9d049f0cc59ce6c2"
+      }
+    }
+  }
+}

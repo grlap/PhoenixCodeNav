@@ -1,0 +1,28 @@
+{
+  "id": "01a08de0-e974-72f2-95f8-2d1a787cc558",
+  "external_ref": null,
+  "title": "Qualify search_symbol orphaned as indexed-model evidence, not proof of dead code",
+  "outcome": "The search_symbol description describes orphaned with the same indexed-model authority as the implementation.",
+  "acceptance": [
+    "search_symbol no longer claims orphaned files are necessarily dead code the compiler never builds; shared/imported compile-item limitations are stated without claiming new evaluator support."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "bug",
+  "priority": 2,
+  "labels": [
+    "documentation",
+    "mcp-contract",
+    "review"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "open",
+  "parent_id": "01a063dd-634e-7851-87df-a923d68a92d1",
+  "child_requirement": "optional",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": null
+}

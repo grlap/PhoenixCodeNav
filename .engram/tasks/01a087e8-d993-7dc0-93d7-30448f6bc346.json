@@ -1,0 +1,54 @@
+{
+  "id": "01a087e8-d993-7dc0-93d7-30448f6bc346",
+  "external_ref": null,
+  "title": "Restore working-tree wording in review-pack summary",
+  "outcome": "Restore working-tree wording in review-pack summary",
+  "acceptance": [
+    "Summary and contract assertion say working-tree dirt; unchanged capability margin still passes."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "task",
+  "priority": 3,
+  "labels": [
+    "csharp",
+    "fsharp",
+    "mcp-contract",
+    "msbuild",
+    "review",
+    "semantic-correctness"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "completed",
+  "parent_id": "01a087c1-16bb-71d0-b87d-168e1dc3ce1e",
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": {
+    "summary": "Restored working-tree dirt in manifest and exact retained-clause assertion; original reviewer verified resolved and final full gate passes unchanged capability growth margin.",
+    "completed_at": "2026-09-09T21:16:19.857513100Z",
+    "actor": {
+      "actor_id": "greg/codex",
+      "actor_kind": "agent"
+    }
+  },
+  "activity": {
+    "central": {
+      "ede17833c726909b82d6142cb26ce378f257b9985d1729d718b8050caec9f02a": {
+        "activity_id": "ede17833c726909b82d6142cb26ce378f257b9985d1729d718b8050caec9f02a",
+        "task_id": "01a087e8-d993-7dc0-93d7-30448f6bc346",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "greg/codex",
+          "actor_kind": "agent"
+        },
+        "state": "finished",
+        "state_revision": 2,
+        "event_id": "0b5c1bd626e52b876cb8b21d3919fa51ec4c62e57d0a47ed18a6cb017c4cb75a"
+      }
+    }
+  }
+}

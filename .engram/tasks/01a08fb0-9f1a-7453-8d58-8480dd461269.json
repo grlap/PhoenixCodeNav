@@ -1,0 +1,53 @@
+{
+  "id": "01a08fb0-9f1a-7453-8d58-8480dd461269",
+  "external_ref": null,
+  "title": "Classify SDK transport-not-connected InvalidOperationException in daemon session recovery",
+  "outcome": "A disconnected SDK session cannot remain established merely because its failure is surfaced as InvalidOperationException; unrelated request errors are not misclassified.",
+  "acceptance": [
+    "First verify the documented disconnected-SDK path, then add decisive request and cancellation-forwarding regressions that distinguish completed/disconnected-session InvalidOperationException from unrelated InvalidOperationException. Observed connection loss invalidates only the matching connection, preserves typed uncertain outcome or caller cancellation, and allows later recovery without replay."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "bug",
+  "priority": 3,
+  "labels": [
+    "daemon",
+    "mcp-contract",
+    "performance",
+    "review",
+    "testing"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "completed",
+  "parent_id": null,
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": {
+    "summary": "Completed bounded real-SDK investigation: suspected InvalidOperationException unconfirmed on measured Windows native-pipe/AF_UNIX analogue paths; classifier unchanged. Added decisive real-client loss/recovery and unrelated-error controls, all gates green and full-union dual review complete.",
+    "completed_at": "2026-09-11T09:55:45.048223Z",
+    "actor": {
+      "actor_id": "greg/codex",
+      "actor_kind": "agent"
+    }
+  },
+  "activity": {
+    "central": {
+      "e8871615c6564a162e68b63bbebc203736f68dc8f5a22ed9537b8b0521e1ada0": {
+        "activity_id": "e8871615c6564a162e68b63bbebc203736f68dc8f5a22ed9537b8b0521e1ada0",
+        "task_id": "01a08fb0-9f1a-7453-8d58-8480dd461269",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "greg/codex",
+          "actor_kind": "agent"
+        },
+        "state": "finished",
+        "state_revision": 2,
+        "event_id": "b52d2c5029fd7e889fa08729d73011b735faac53f120d801ee3d3149251c835d"
+      }
+    }
+  }
+}

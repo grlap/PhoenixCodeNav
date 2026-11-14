@@ -1,0 +1,64 @@
+{
+  "id": "01a092f1-fb1c-7ae1-bc8c-707a4f6738eb",
+  "external_ref": null,
+  "title": "Document the F# timing collector sequential same-phase span contract",
+  "outcome": "The collector explicitly states its existing sequential same-phase precondition; unsupported hypothetical overlap is not presented as supported or repaired.",
+  "acceptance": [
+    "Preserve existing aggregation, frozen/interrupted snapshot and idempotent disposal tests; do not add overlap machinery, scheduling or cache changes.",
+    "State beside FSharpSemanticTimingBox that same-phase spans must be sequential and overlapping starts are unsupported; verify existing Core/FCS callers remain sequential."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "task",
+  "priority": 3,
+  "labels": [
+    "performance",
+    "review",
+    "testing"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "completed",
+  "parent_id": "01a06ec3-2b25-79a0-bc69-89d0d8974a3d",
+  "child_requirement": "optional",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": {
+    "summary": "Published 4294b363770d85fda540a2265b79e51bc6196fcf; installed v0.12.109 at C:/tools/phoenix-pilot. Accepted and verified by owner decision: same-phase spans are sequential by documented contract and all current callers satisfy it. This is NOT an overlap implementation/fix; overlapping starts remain unsupported.",
+    "completed_at": "2026-09-12T01:10:01.608529600Z",
+    "actor": {
+      "actor_id": "greg/codex",
+      "actor_kind": "agent"
+    }
+  },
+  "activity": {
+    "central": {
+      "038dce326475b75106d81cd8afa529fb80b7864889b2c1b377515dbabe2a674e": {
+        "activity_id": "038dce326475b75106d81cd8afa529fb80b7864889b2c1b377515dbabe2a674e",
+        "task_id": "01a092f1-fb1c-7ae1-bc8c-707a4f6738eb",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "greg/codex",
+          "actor_kind": "agent"
+        },
+        "state": "finished",
+        "state_revision": 2,
+        "event_id": "f9066f50dfe9c4d8c9f8ca8eaa8e1dff60eaf17c2c6a2097118da213a3a7a279"
+      },
+      "2be08c10d23ee1bb5fa93a292e536ad782908227e707ed2a318258a125af81f0": {
+        "activity_id": "2be08c10d23ee1bb5fa93a292e536ad782908227e707ed2a318258a125af81f0",
+        "task_id": "01a092f1-fb1c-7ae1-bc8c-707a4f6738eb",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "greg/codex",
+          "actor_kind": "agent"
+        },
+        "state": "released",
+        "state_revision": 2,
+        "event_id": "748187dcbe424ee43bd4559e201602c965a0e9cbf60eb622328b2f820b31118e"
+      }
+    }
+  }
+}

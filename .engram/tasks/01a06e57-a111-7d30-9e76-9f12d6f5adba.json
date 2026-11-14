@@ -1,0 +1,63 @@
+{
+  "id": "01a06e57-a111-7d30-9e76-9f12d6f5adba",
+  "external_ref": null,
+  "title": "Restore movedFiles readiness gating in LaterMoveGlobExhaustion",
+  "outcome": "The Git regression retries until movedFiles and the required formerTypes evidence are both present.",
+  "acceptance": [
+    "The ParseWithRetry predicate requires movedFiles before later assertions dereference it."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "task",
+  "priority": 3,
+  "labels": [
+    "git",
+    "review",
+    "testing"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "completed",
+  "parent_id": "01a063dd-5ecb-7000-814f-7cc52012253b",
+  "child_requirement": "optional",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": {
+    "summary": "Restored movedFiles readiness gating in LaterMoveGlobExhaustion.",
+    "completed_at": "2026-09-05T00:03:14.708717500Z",
+    "actor": {
+      "actor_id": "greg/codex",
+      "actor_kind": "agent"
+    }
+  },
+  "activity": {
+    "central": {
+      "3951b58f1b81aaeffb314f255d3b06da9c28162e89bf82eb119c9518264d5754": {
+        "activity_id": "3951b58f1b81aaeffb314f255d3b06da9c28162e89bf82eb119c9518264d5754",
+        "task_id": "01a06e57-a111-7d30-9e76-9f12d6f5adba",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "greg/codex",
+          "actor_kind": "agent"
+        },
+        "state": "finished",
+        "state_revision": 2,
+        "event_id": "71f27e20efdd408b5e60c4749947ef533b990004c8dd9d455bac1c20af23bfbc"
+      },
+      "d8c0b2e3e1729102a2103c9c846ebe80505f7d13edcecd61cbcfd8f4480dee55": {
+        "activity_id": "d8c0b2e3e1729102a2103c9c846ebe80505f7d13edcecd61cbcfd8f4480dee55",
+        "task_id": "01a06e57-a111-7d30-9e76-9f12d6f5adba",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "greg/codex",
+          "actor_kind": "agent"
+        },
+        "state": "started",
+        "state_revision": 1,
+        "event_id": "d8c0b2e3e1729102a2103c9c846ebe80505f7d13edcecd61cbcfd8f4480dee55"
+      }
+    }
+  }
+}

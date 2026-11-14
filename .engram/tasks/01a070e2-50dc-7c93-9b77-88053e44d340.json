@@ -1,0 +1,61 @@
+{
+  "id": "01a070e2-50dc-7c93-9b77-88053e44d340",
+  "external_ref": null,
+  "title": "Whole-solution dotnet format is red on two untouched files",
+  "outcome": "Whole-solution dotnet format is red on two untouched files",
+  "acceptance": [
+    "Whole-solution dotnet format is red on two untouched files is done"
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "chore",
+  "priority": 3,
+  "labels": [
+    "hygiene"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "completed",
+  "parent_id": null,
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": {
+    "summary": "Cleared the two pre-existing whole-solution formatter debts and committed them with v0.12.88 in 8a0ede51693945c528117d1b57dfd3662e341385.",
+    "completed_at": "2026-09-06T05:07:33.090705500Z",
+    "actor": {
+      "actor_id": "greg/codex",
+      "actor_kind": "agent"
+    }
+  },
+  "activity": {
+    "central": {
+      "652f25b5209a91e19bf3833e4e0e1014f80caabdfcfa6a3dc150f5a40a811ff3": {
+        "activity_id": "652f25b5209a91e19bf3833e4e0e1014f80caabdfcfa6a3dc150f5a40a811ff3",
+        "task_id": "01a070e2-50dc-7c93-9b77-88053e44d340",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "greg/codex",
+          "actor_kind": "agent"
+        },
+        "state": "started",
+        "state_revision": 1,
+        "event_id": "652f25b5209a91e19bf3833e4e0e1014f80caabdfcfa6a3dc150f5a40a811ff3"
+      },
+      "b6e83cb17afa211a9f0636517a8f338c7bad6b22f8076fd268d47898bbacb2a7": {
+        "activity_id": "b6e83cb17afa211a9f0636517a8f338c7bad6b22f8076fd268d47898bbacb2a7",
+        "task_id": "01a070e2-50dc-7c93-9b77-88053e44d340",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "greg/codex",
+          "actor_kind": "agent"
+        },
+        "state": "finished",
+        "state_revision": 2,
+        "event_id": "32269eadc80410dd18ac8568b6f5cf70e6f6bde431817aec1f07276c6b343829"
+      }
+    }
+  }
+}

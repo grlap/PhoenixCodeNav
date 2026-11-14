@@ -1,0 +1,29 @@
+{
+  "id": "01a08806-ec10-7042-b7e4-e6b0a8595a89",
+  "external_ref": null,
+  "title": "Cover and document the unquoted self-default operand form",
+  "outcome": "Cover and document the unquoted self-default operand form",
+  "acceptance": [
+    "Add a positive $(AssemblyName) == '' and a negative $(AssemblyName) == 'x' row to the compound self-default theories, and document the unquoted property operand form in docs/design.md."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "task",
+  "priority": 3,
+  "labels": [
+    "fsharp",
+    "msbuild",
+    "review",
+    "testing"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "open",
+  "parent_id": null,
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": null
+}

@@ -1,0 +1,85 @@
+{
+  "id": "01a063dd-580b-7480-8d28-895853574bf6",
+  "external_ref": null,
+  "title": "Add F# semantic callers and callees",
+  "outcome": "Phoenix v0.12.88 provides compiler-semantic, position-only F# callers across the selected closure and proven workspace dependents, and body-local F# callees, using typed AssemblyContents evidence, the shared keepAssemblyContents runtime, honest workspace coverage, a closed callKind contract, and no heuristic target inference.",
+  "acceptance": [
+    "Both operations reuse the v0.12.87 gate, pinned snapshot, capture session, evaluated dependent discovery where applicable, filters, binary verification, diagnostics, exact/lower-bound confidence rules, and the same four-entry fingerprint-keyed keepAssemblyContents runtime; per-context results merge only after binary verification",
+    "BuildInfo.Version is 0.12.88, fsharp-callers-workspace and fsharp-callees-body are unique features[] entries, fsharpSemanticTools lists both, unsupported-boundary prose leaves only hierarchy unavailable, no new or lowered limit is introduced, and IndexBuilder.SchemaVersion is unchanged",
+    "Callers positioned on override or explicit-interface implementations retain that target and disclose dispatchSlots plus dynamic-dispatch guidance; positions on abstract/interface slots return slot-dispatch callers",
+    "F# callees accepts an exact position on or inside a function/member/constructor body and reports compiler-resolved calls inside that body including nested lambdas, local functions, object expressions, primary-constructor do/let bindings, constructions, union cases, active patterns, operators, and computation-expression builder calls; coverage scope is selected_fsharp_body_with_project_reference_closure_targets",
+    "F# callers accepts only an exact compile-owned .fs/.fsi position and reports every typed body site that invokes or hands off the compiler-resolved target across the selected closure, distinct declaring projects, and proven workspace dependents; sites are globally deduplicated by physical path+range+callKind and TFMs are accumulated",
+    "F# mode requires path+line+column and rejects C# selectors/positive maxProjects with incompatible_filter; C# mode rejects F# projectPath/targetFramework/includeTests/includeGenerated arguments symmetrically without otherwise changing C# behavior",
+    "MCP envelopes preserve the C# callers[].caller+callSites and callees[].callee+callLines cores, add F# range/callKind/project/TFM details and complete totals outside budgeted lists, preserve selected target/body identity, and disclose filters, coverage, truncation, contexts, diagnostics, timing, and retry metadata",
+    "Release build has zero warnings/errors; full suite, external Roslyn/F# MCP gate, website verifier, formatting/diff checks, and same-session dual adversarial review are green before commit",
+    "Tests decisively cover cross-project callers, direct/partial/pipeline/first-class/composition cases, overload exactness, recursion, members/properties/constructors/union cases/active patterns/operators/CE, nested callee bodies, TFM dedupe, filters, deadlines, discovery and binary failures, quotation/TraitCall boundaries, C# envelope parity, argument rejection, response budgets, feature discovery, metadata, v0.12.88, and unchanged schema",
+    "The closed callKind set is directApplication, partialApplication, pipelineApplication, computationExpression, firstClassReference, construction, unionCaseConstruction, activePattern, operator, and indirectApplication; first-class and composition operands count without interprocedural flow propagation, partial applications and pipelines count, and SRTP TraitCall is never guessed",
+    "The eight existing fsharp_workspace_* causes retain their meanings and a ninth fsharp_workspace_trait_calls_unresolved cause has an emitter/coverage field, exact-confidence classifier entry, docs/design.md table row, and decisive classifier/feature regression"
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "task",
+  "priority": 1,
+  "labels": [
+    "fsharp",
+    "mcp-contract",
+    "semantic"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "completed",
+  "parent_id": "01a063dd-5401-7f73-a63d-bea317b25710",
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": {
+    "summary": "Delivered and committed Phoenix v0.12.88 compiler-semantic F# callers and body-local callees, with position-only contracts, workspace-dependent caller coverage, dispatch metadata, a closed callKind vocabulary, truthful coverage/truncation shaping, versioned capability discovery, the deterministic gate wrapper, and decisive regressions. Commit 8a0ede51693945c528117d1b57dfd3662e341385 contains exactly the audited 22-path packet; no push.",
+    "completed_at": "2026-09-06T05:07:07.124169200Z",
+    "actor": {
+      "actor_id": "greg/codex",
+      "actor_kind": "agent"
+    }
+  },
+  "activity": {
+    "central": {
+      "406d1be717059b126566b2f2237048fd87c872d53b88bb8bdedb4d9f8d95d1c8": {
+        "activity_id": "406d1be717059b126566b2f2237048fd87c872d53b88bb8bdedb4d9f8d95d1c8",
+        "task_id": "01a063dd-580b-7480-8d28-895853574bf6",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "greg/codex",
+          "actor_kind": "agent"
+        },
+        "state": "finished",
+        "state_revision": 2,
+        "event_id": "e104075bfca1a6aba1b7bb83874204e52d3d412cf3322b33bdcdc3ed66e8132c"
+      },
+      "52def474c49b0ba0583012a6b725b90d1db4c67da0a9152d635c0ca1f5ffb449": {
+        "activity_id": "52def474c49b0ba0583012a6b725b90d1db4c67da0a9152d635c0ca1f5ffb449",
+        "task_id": "01a063dd-580b-7480-8d28-895853574bf6",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "greg/codex",
+          "actor_kind": "agent"
+        },
+        "state": "started",
+        "state_revision": 1,
+        "event_id": "52def474c49b0ba0583012a6b725b90d1db4c67da0a9152d635c0ca1f5ffb449"
+      },
+      "cdd5c7c4b61e2e0a97953b5f508dc988b84da65b8329075fefb9a1cf3f0bee9c": {
+        "activity_id": "cdd5c7c4b61e2e0a97953b5f508dc988b84da65b8329075fefb9a1cf3f0bee9c",
+        "task_id": "01a063dd-580b-7480-8d28-895853574bf6",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "fable",
+          "actor_kind": "agent"
+        },
+        "state": "released",
+        "state_revision": 2,
+        "event_id": "d754e01395134f0215683efe2fb340becaaec10c9806672c420577759bb38aa9"
+      }
+    }
+  }
+}

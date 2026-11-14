@@ -1,0 +1,63 @@
+{
+  "id": "01a092f1-faf6-7512-ab81-bc23c3eb5d99",
+  "external_ref": null,
+  "title": "Reconcile the C# timing feature omission wording with F# engine=fcs attribution",
+  "outcome": "The manifest explicitly distinguishes C# phase shape omission from the F# engine=fcs timing shape in the shared semanticColdStart envelope.",
+  "acceptance": [
+    "The Batch4SearchGradingTests and published FSharpSingleFilePublishTests assertions pin the corrected C#-shape scope; all feature IDs and the unchanged 2048-byte reserve are preserved.",
+    "semantic-cold-start-phase-timing no longer makes an unqualified 'Omitted for F#' claim about the shared timing.semanticColdStart location; the F# shape and its feature ID remain discoverable."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "task",
+  "priority": 2,
+  "labels": [
+    "mcp-contract",
+    "review"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "completed",
+  "parent_id": "01a06ec3-2b25-79a0-bc69-89d0d8974a3d",
+  "child_requirement": "optional",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": {
+    "summary": "Published 4294b363770d85fda540a2265b79e51bc6196fcf; installed v0.12.109 at C:/tools/phoenix-pilot. Verified resolved in the final reviewed bytes: false unqualified F# omission removed; both pinned capability assertions updated; F# engine=fcs remains discoverable and the 2048-byte reserve is unchanged.",
+    "completed_at": "2026-09-12T01:10:01.513471300Z",
+    "actor": {
+      "actor_id": "greg/codex",
+      "actor_kind": "agent"
+    }
+  },
+  "activity": {
+    "central": {
+      "15304a855d07ed84808977b0980ed40dedc2c71b60943080b09dedc5d822469c": {
+        "activity_id": "15304a855d07ed84808977b0980ed40dedc2c71b60943080b09dedc5d822469c",
+        "task_id": "01a092f1-faf6-7512-ab81-bc23c3eb5d99",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "greg/codex",
+          "actor_kind": "agent"
+        },
+        "state": "released",
+        "state_revision": 2,
+        "event_id": "8eee7467e03eff66fdcbe9c05cd359d520c5d4744c9cfe6c3e5baac79963bb44"
+      },
+      "f16be3ef93287a810b4c07b44daf9d9fdb09c8b236f4991144933ca4377cb9b8": {
+        "activity_id": "f16be3ef93287a810b4c07b44daf9d9fdb09c8b236f4991144933ca4377cb9b8",
+        "task_id": "01a092f1-faf6-7512-ab81-bc23c3eb5d99",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "greg/codex",
+          "actor_kind": "agent"
+        },
+        "state": "finished",
+        "state_revision": 2,
+        "event_id": "6bbfd551734946d87f2dd2da96c778c70ed8ad21b62f071a952c5299f62e4202"
+      }
+    }
+  }
+}

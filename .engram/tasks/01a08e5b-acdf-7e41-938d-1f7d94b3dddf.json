@@ -1,0 +1,31 @@
+{
+  "id": "01a08e5b-acdf-7e41-938d-1f7d94b3dddf",
+  "external_ref": null,
+  "title": "Always clean up the in-process daemon when recovery exit-test process cleanup fails",
+  "outcome": "Always clean up the in-process daemon when recovery exit-test process cleanup fails",
+  "acceptance": [
+    "Recovery exit-test cleanup always cancels and releases the in-process daemon, resets runtime mode and attempts endpoint cleanup even when process stop or stderr drain fails; original test failure is not masked by cleanup-only assertions."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "bug",
+  "priority": 3,
+  "labels": [
+    "agent-experience",
+    "daemon",
+    "mcp-contract",
+    "recovery",
+    "review",
+    "testing"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "superseded",
+  "parent_id": "01a0878d-bcc4-7b40-b666-6910452d64bd",
+  "child_requirement": "optional",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": "01a08e7e-53cf-7f20-8c61-b674c251936c",
+  "disposal_reason": "Greg requested implementation of these follow-ups after their optional parents completed; continue independently while preserving original review provenance.",
+  "completion": null
+}

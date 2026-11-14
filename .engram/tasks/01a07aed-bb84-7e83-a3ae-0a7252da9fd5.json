@@ -1,0 +1,27 @@
+{
+  "id": "01a07aed-bb84-7e83-a3ae-0a7252da9fd5",
+  "external_ref": null,
+  "title": "Report leaked user-profile portal runtime test roots in the gate wrapper",
+  "outcome": "Report leaked user-profile portal runtime test roots in the gate wrapper",
+  "acceptance": [
+    "The gate wrapper inventories and reports ~/.phoenixcodenav-runtime-test-* roots alongside TEMP families without deleting them or changing the packet-B3b test-only scope"
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "task",
+  "priority": 2,
+  "labels": [
+    "infrastructure",
+    "testing"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "open",
+  "parent_id": null,
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": null
+}

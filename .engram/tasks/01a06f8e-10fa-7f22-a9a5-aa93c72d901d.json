@@ -1,0 +1,27 @@
+{
+  "id": "01a06f8e-10fa-7f22-a9a5-aa93c72d901d",
+  "external_ref": null,
+  "title": "Document how an MCP-only review parent runs the /review-changes contract from its own tools",
+  "outcome": "CLAUDE.md/AGENTS.md say /review-changes is the only command allowed to spawn reviewer sessions and must be invoked directly in the writable parent. A parent whose TermAl MCP surface cannot invoke slash commands has in practice executed the same contract from its own tools all of 2026-09-04/05: parent-owned gates and freeze, exactly one Codex and one Claude read-only /review-code child spawned through TermAl with the frozen packet, then fan-in and same-child verification; those rounds were accepted as the dual review for 0.12.77-0.12.79. Termal::Fable confirmed on 2026-09-05 that a literal self-invocation is not required and that parent guidance outside the TermAl repository is queued. Update the review-system section so an MCP-only parent knows it executes the documented steps itself, that no human UI trigger is needed, and that the step list, reviewer count, read-only policy and fan-in remain mandatory. Contract tests for the review commands are ordinary implementation targets; no infrastructure tests.",
+  "acceptance": [
+    "Document how an MCP-only review parent runs the /review-changes contract from its own tools is done"
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "chore",
+  "priority": 3,
+  "labels": [
+    "documentation",
+    "review"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "open",
+  "parent_id": null,
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": null
+}

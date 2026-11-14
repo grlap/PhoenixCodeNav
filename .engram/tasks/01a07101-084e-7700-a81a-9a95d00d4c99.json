@@ -1,0 +1,50 @@
+{
+  "id": "01a07101-084e-7700-a81a-9a95d00d4c99",
+  "external_ref": null,
+  "title": "Align remaining F# ProjectReference closure error details",
+  "outcome": "Align remaining F# ProjectReference closure error details",
+  "acceptance": [
+    "Definition-outside detail names the captured closure and non-evaluable project extensions use the unsupported-language cause."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "bug",
+  "priority": 3,
+  "labels": [
+    "mcp-contract",
+    "review"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "completed",
+  "parent_id": "01a063dd-599c-7253-999b-3eff45080442",
+  "child_requirement": "optional",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": {
+    "summary": "Aligned definition-outside prose with the captured closure and routed non-evaluable project extensions to the unsupported-language cause.",
+    "completed_at": "2026-09-05T10:39:24.249052500Z",
+    "actor": {
+      "actor_id": "greg/codex",
+      "actor_kind": "agent"
+    }
+  },
+  "activity": {
+    "central": {
+      "2aac1bcd9bb0e34458fc7afa083e726fe6ed4d721569b22b870f1e41ecc6ba68": {
+        "activity_id": "2aac1bcd9bb0e34458fc7afa083e726fe6ed4d721569b22b870f1e41ecc6ba68",
+        "task_id": "01a07101-084e-7700-a81a-9a95d00d4c99",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "greg/codex",
+          "actor_kind": "agent"
+        },
+        "state": "finished",
+        "state_revision": 2,
+        "event_id": "e086755f95a386dd2b8f52029c9e1ba6bd93f41edce438ed7bb8fc3bf1645b9e"
+      }
+    }
+  }
+}

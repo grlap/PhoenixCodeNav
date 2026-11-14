@@ -1,0 +1,58 @@
+{
+  "id": "01a08389-f3e0-7b73-9674-c3d750873b67",
+  "external_ref": null,
+  "title": "Pin opaque item and metadata handling in C# central-package expansion",
+  "outcome": "C# central-package scalar expansion preserves its historical opaque-marker behavior while final version validation rejects unresolved item or metadata syntax.",
+  "acceptance": [
+    "Tests cover @() and %() flowing through a referenced central property and falling back to the direct unresolved package reference.",
+    "The call site documents the final-version validation dependency."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "task",
+  "priority": 2,
+  "labels": [
+    "architecture",
+    "csharp",
+    "fsharp",
+    "mcp-contract",
+    "msbuild",
+    "review",
+    "semantic",
+    "semantic-correctness",
+    "testing"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "completed",
+  "parent_id": "01a08298-8fc2-7781-90fb-e9d128515475",
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": {
+    "summary": "Opaque item/metadata call-site dependency documented and decisive downstream version rejection fixtures added; reviewers verified. Committed 9cd8aa9. Final same-session dual review CLEAN; full solution1587/0, Release0warnings/errors, MCP47/0, website167/167. No numeric limit changes.",
+    "completed_at": "2026-09-09T01:39:06.493278700Z",
+    "actor": {
+      "actor_id": "greg/codex",
+      "actor_kind": "agent"
+    }
+  },
+  "activity": {
+    "central": {
+      "1bc451a12b1edc3fc5496588b81923e2bd48848b11a2a5c96d72a79158744d6d": {
+        "activity_id": "1bc451a12b1edc3fc5496588b81923e2bd48848b11a2a5c96d72a79158744d6d",
+        "task_id": "01a08389-f3e0-7b73-9674-c3d750873b67",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "greg/codex",
+          "actor_kind": "agent"
+        },
+        "state": "finished",
+        "state_revision": 2,
+        "event_id": "880d5458862092978e4a238b7a1fff1d37c2ca8fbc415f7d1eda421c95217ce7"
+      }
+    }
+  }
+}

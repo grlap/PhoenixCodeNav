@@ -1,0 +1,53 @@
+{
+  "id": "01a068a3-92a7-7300-bef1-636a43d0e438",
+  "external_ref": null,
+  "title": "Pin Phoenix CLI reserved names against the live MCP schemas",
+  "outcome": "A future MCP wire parameter cannot be silently shadowed or made unreachable by a CLI-global option.",
+  "acceptance": [
+    "A registration-backed contract test fails if any live tool schema declares a reserved CLI-global field."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "task",
+  "priority": 2,
+  "labels": [
+    "agent-experience",
+    "cli",
+    "mcp-contract",
+    "review",
+    "testing"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "completed",
+  "parent_id": "01a06819-d56e-7e42-99e2-d6c75600a4c8",
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": {
+    "summary": "Delivered in commit eee9ee5 as part of the reviewed Phoenix CLI changeset.",
+    "completed_at": "2026-09-03T21:34:22.142431Z",
+    "actor": {
+      "actor_id": "termal",
+      "actor_kind": "agent"
+    }
+  },
+  "activity": {
+    "central": {
+      "1c253a85add0c8bedcbaf5ea4686ec6860c0d5279b92aecbc7d8b50be89fc678": {
+        "activity_id": "1c253a85add0c8bedcbaf5ea4686ec6860c0d5279b92aecbc7d8b50be89fc678",
+        "task_id": "01a068a3-92a7-7300-bef1-636a43d0e438",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "termal",
+          "actor_kind": "agent"
+        },
+        "state": "finished",
+        "state_revision": 2,
+        "event_id": "12be8dd2de95140bb0b92f20d7a7bc3027cef307cee399255528c72cf3445995"
+      }
+    }
+  }
+}

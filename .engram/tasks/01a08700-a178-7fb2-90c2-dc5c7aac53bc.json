@@ -1,0 +1,54 @@
+{
+  "id": "01a08700-a178-7fb2-90c2-dc5c7aac53bc",
+  "external_ref": null,
+  "title": "Pin SDK refusal disclosure for root SDK plus child declaration",
+  "outcome": "Pin SDK refusal disclosure for root SDK plus child declaration",
+  "acceptance": [
+    "The root Microsoft.NET.Sdk plus child Sdk refusal asserts sdk_unsupported and absence of fsharp_semantic_sdk_implicit_authority; documentation states this refused shape does not claim accepted SDK authority."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "task",
+  "priority": 3,
+  "labels": [
+    "csharp",
+    "fsharp",
+    "review",
+    "semantic-correctness",
+    "shared-evaluation",
+    "testing"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "completed",
+  "parent_id": "01a086ca-de85-7841-a7b1-82e500b03f41",
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": {
+    "summary": "Original reviewers verified exact root Microsoft.NET.Sdk + child Sdk regression, absence of sdk_implicit_authority on refused declarations, and matching documentation. Focused41/0/full1717/0/2; requirement satisfied.",
+    "completed_at": "2026-09-09T17:02:38.596299300Z",
+    "actor": {
+      "actor_id": "greg/codex",
+      "actor_kind": "agent"
+    }
+  },
+  "activity": {
+    "central": {
+      "b778f6f9b7d06f5dec851faa00d808635993a20783447c7422e441c8377dc0d7": {
+        "activity_id": "b778f6f9b7d06f5dec851faa00d808635993a20783447c7422e441c8377dc0d7",
+        "task_id": "01a08700-a178-7fb2-90c2-dc5c7aac53bc",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "greg/codex",
+          "actor_kind": "agent"
+        },
+        "state": "finished",
+        "state_revision": 2,
+        "event_id": "149d00561fd36de39d60675357c8403d812c7aae672cc2e53a5d4d303e52e8f8"
+      }
+    }
+  }
+}

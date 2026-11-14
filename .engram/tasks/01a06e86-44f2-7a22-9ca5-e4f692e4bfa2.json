@@ -1,0 +1,48 @@
+{
+  "id": "01a06e86-44f2-7a22-9ca5-e4f692e4bfa2",
+  "external_ref": null,
+  "title": "Tighten the black-hole glow around the sphere",
+  "outcome": "Reduce radial spread and halo blur while preserving the large sphere and existing text layout.",
+  "acceptance": [
+    "The glowing particle ring forms a visibly narrower band close to the sphere.",
+    "Website verification passes and desktop/mobile geometry remains unchanged."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "task",
+  "priority": 2,
+  "labels": [],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "completed",
+  "parent_id": null,
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": {
+    "summary": "Delivered a tighter particle ring and narrower glow around the existing large sphere, preserving text and responsive layout.",
+    "completed_at": "2026-09-04T22:26:30.091027900Z",
+    "actor": {
+      "actor_id": "greg/codex",
+      "actor_kind": "agent"
+    }
+  },
+  "activity": {
+    "central": {
+      "bf9ad284757dbfd025074e517fea938f4ecaa57bc844c64bda347f2425c0b992": {
+        "activity_id": "bf9ad284757dbfd025074e517fea938f4ecaa57bc844c64bda347f2425c0b992",
+        "task_id": "01a06e86-44f2-7a22-9ca5-e4f692e4bfa2",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "greg/codex",
+          "actor_kind": "agent"
+        },
+        "state": "finished",
+        "state_revision": 2,
+        "event_id": "92c7528aab77053bce3e5b321406cf883e8bc815eeaf0b8082105038fb07f38f"
+      }
+    }
+  }
+}

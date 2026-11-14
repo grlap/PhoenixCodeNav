@@ -1,0 +1,56 @@
+{
+  "id": "01a08389-f482-7890-931f-a880d8f9176e",
+  "external_ref": null,
+  "title": "Avoid repeated literal work in C# central-package shared expansion",
+  "outcome": "Literal C# central-package property values retain the existing single-pass fast path instead of constructing and scanning the shared evaluator.",
+  "acceptance": [
+    "Literal values bypass shared regex/evaluator construction while preserving all existing aggregate accounting and results."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "task",
+  "priority": 3,
+  "labels": [
+    "architecture",
+    "csharp",
+    "fsharp",
+    "msbuild",
+    "performance",
+    "review",
+    "semantic",
+    "semantic-correctness"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "completed",
+  "parent_id": "01a08298-8fc2-7781-90fb-e9d128515475",
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": {
+    "summary": "C# literal fast path avoids evaluator/regex construction while retaining original budgets; reviewers verified. Committed 9cd8aa9. Final same-session dual review CLEAN; full solution1587/0, Release0warnings/errors, MCP47/0, website167/167. No numeric limit changes.",
+    "completed_at": "2026-09-09T01:39:07.869683700Z",
+    "actor": {
+      "actor_id": "greg/codex",
+      "actor_kind": "agent"
+    }
+  },
+  "activity": {
+    "central": {
+      "86d03587acbdec99b53bce46965badce7d6ec2b7d031d643906e61cded3eef93": {
+        "activity_id": "86d03587acbdec99b53bce46965badce7d6ec2b7d031d643906e61cded3eef93",
+        "task_id": "01a08389-f482-7890-931f-a880d8f9176e",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "greg/codex",
+          "actor_kind": "agent"
+        },
+        "state": "finished",
+        "state_revision": 2,
+        "event_id": "f9214712f54eb55278462c4cae0434b5b8bbd965dc9c22ea5dc6cb128dffb140"
+      }
+    }
+  }
+}

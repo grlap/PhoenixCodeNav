@@ -1,0 +1,29 @@
+{
+  "id": "01a07df9-b322-70c3-a0d9-1f4c74573c5d",
+  "external_ref": null,
+  "title": "Avoid probing MainModule for already name-matched strict-cleanup processes",
+  "outcome": "Avoid probing MainModule for already name-matched strict-cleanup processes",
+  "acceptance": [
+    "Strict-cleanup failure diagnostics evaluate the cheap process-name selector before MainModule and do not probe MainModule when the name already matches."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "task",
+  "priority": 3,
+  "labels": [
+    "infrastructure",
+    "performance",
+    "review",
+    "testing"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "open",
+  "parent_id": "01a078ae-bdca-7b30-a846-3887ea1da0de",
+  "child_requirement": "optional",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": null
+}

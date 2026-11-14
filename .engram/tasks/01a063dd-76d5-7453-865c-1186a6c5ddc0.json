@@ -1,0 +1,40 @@
+{
+  "id": "01a063dd-76d5-7453-865c-1186a6c5ddc0",
+  "external_ref": null,
+  "title": "Prevent semantic cluster caps from dropping known implementations",
+  "outcome": "Prevent semantic cluster caps from dropping known implementations",
+  "acceptance": [
+    "Prevent semantic cluster caps from dropping known implementations is done"
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "task",
+  "priority": 1,
+  "labels": [],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "open",
+  "parent_id": null,
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": null,
+  "activity": {
+    "central": {
+      "5ef0d6ae5b4596a8b284dbe1661f440419fb9ea8f058fcbf7ba05b71c3e52092": {
+        "activity_id": "5ef0d6ae5b4596a8b284dbe1661f440419fb9ea8f058fcbf7ba05b71c3e52092",
+        "task_id": "01a063dd-76d5-7453-865c-1186a6c5ddc0",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "fable",
+          "actor_kind": "agent"
+        },
+        "state": "released",
+        "state_revision": 2,
+        "event_id": "f56c7824635dac6dcf3dbd2a80f5e93af3d0f97fc93cc7bc1951b4417168e7e9"
+      }
+    }
+  }
+}

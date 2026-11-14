@@ -1,0 +1,50 @@
+{
+  "id": "01a06ddc-a2aa-7012-b26c-6c8ff734c9ed",
+  "external_ref": null,
+  "title": "Double the wide-screen hero event horizon",
+  "outcome": "The desktop hero renders a roughly 2x larger central black-hole sphere while preserving the intended left/right text contour and responsive layout.",
+  "acceptance": [
+    "At wide desktop widths, the central black-hole sphere is approximately twice the prior diameter.",
+    "Compact and mobile layouts remain usable.",
+    "The headline remains three visual lines and the descriptive copy retains its spherical arc.",
+    "Website verification passes."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "task",
+  "priority": 1,
+  "labels": [],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "completed",
+  "parent_id": null,
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": {
+    "summary": "Delivered a responsive 2x black-hole hero on wide screens, with the headline held to three lines and the right copy retaining its spherical wrap. Added contract checks for the wide sizing and responsive horizon scale.",
+    "completed_at": "2026-09-04T19:20:23.950642900Z",
+    "actor": {
+      "actor_id": "greg/codex",
+      "actor_kind": "agent"
+    }
+  },
+  "activity": {
+    "central": {
+      "bb847833b2d175502831a44f0a7ccb24308f39009c79c1d801c2e98a810fdd77": {
+        "activity_id": "bb847833b2d175502831a44f0a7ccb24308f39009c79c1d801c2e98a810fdd77",
+        "task_id": "01a06ddc-a2aa-7012-b26c-6c8ff734c9ed",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "greg/codex",
+          "actor_kind": "agent"
+        },
+        "state": "finished",
+        "state_revision": 2,
+        "event_id": "90148f863f37bd70e20da00764b6fc51ab033d3152a4eb4990bc85f03105beef"
+      }
+    }
+  }
+}

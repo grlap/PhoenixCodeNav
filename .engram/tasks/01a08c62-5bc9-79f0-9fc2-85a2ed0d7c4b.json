@@ -1,0 +1,54 @@
+{
+  "id": "01a08c62-5bc9-79f0-9fc2-85a2ed0d7c4b",
+  "external_ref": null,
+  "title": "Restore trim/case and unrecognized-value coverage for PHOENIX_FSHARP_PROJECT_MODEL",
+  "outcome": "Restore trim/case and unrecognized-value coverage for PHOENIX_FSHARP_PROJECT_MODEL",
+  "acceptance": [
+    "Environment-selection regression covers padded mixed-case EVALUATED selecting Evaluated, and unrecognized nonempty value selecting Simple with emitted warning; existing immutable-manager and explicit-constructor controls remain."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "task",
+  "priority": 3,
+  "labels": [
+    "default",
+    "fsharp",
+    "project-model",
+    "review",
+    "semantic",
+    "testing"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "completed",
+  "parent_id": null,
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": {
+    "summary": "Padded/case variants, invalid fallback with exact single warning, immutable-manager selection and explicit-constructor controls pass; required concurrent log-sink correction is completed.",
+    "completed_at": "2026-09-10T20:49:38.642443400Z",
+    "actor": {
+      "actor_id": "greg/codex",
+      "actor_kind": "agent"
+    }
+  },
+  "activity": {
+    "central": {
+      "890e3a01d1ea46504c8f2a9115eb51579aa0df75f7ec41d14bd69aa2ff10eb40": {
+        "activity_id": "890e3a01d1ea46504c8f2a9115eb51579aa0df75f7ec41d14bd69aa2ff10eb40",
+        "task_id": "01a08c62-5bc9-79f0-9fc2-85a2ed0d7c4b",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "greg/codex",
+          "actor_kind": "agent"
+        },
+        "state": "finished",
+        "state_revision": 2,
+        "event_id": "486a915c8438fc462546177e1c1a6befc214f80ecf5ffbb5af660efddfed42f4"
+      }
+    }
+  }
+}

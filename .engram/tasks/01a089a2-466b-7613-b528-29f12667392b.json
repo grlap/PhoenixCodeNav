@@ -1,0 +1,30 @@
+{
+  "id": "01a089a2-466b-7613-b528-29f12667392b",
+  "external_ref": null,
+  "title": "Disclose MSBuild diagnostic I/O inside the index writer transaction",
+  "outcome": "Disclose MSBuild diagnostic I/O inside the index writer transaction",
+  "acceptance": [
+    "Any claim about slowdown magnitude or cancellation causality is supported by measurement, not inferred from count-based evaluator budgets or an aborted record.",
+    "README and design documentation explicitly state that enabled diagnostic appends occur inside the index writer transaction, can prolong the writer hold, and should be disabled after reproduction; alternatively a reviewed implementation moves flushing outside that transaction without changing diagnostic/result semantics."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "task",
+  "priority": 2,
+  "labels": [
+    "diagnostics",
+    "msbuild",
+    "performance",
+    "review"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "open",
+  "parent_id": "01a08976-b0f6-7c30-a489-74bbf23b3ba8",
+  "child_requirement": "optional",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": null
+}

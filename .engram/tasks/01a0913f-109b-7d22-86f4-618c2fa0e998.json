@@ -1,0 +1,30 @@
+{
+  "id": "01a0913f-109b-7d22-86f4-618c2fa0e998",
+  "external_ref": null,
+  "title": "Exercise the unclassified DaemonProxy fallback wiring through RunAsync",
+  "outcome": "A test reaches the actual generic pre-relay catch and verifies that retryable advice remains true while its unavailable MCP session is terminal and does not advertise session recovery.",
+  "acceptance": [
+    "A focused test drives DaemonProxy.RunAsync into a non-typed pre-relay exception and asserts daemon_proxy_failed, retryable:true, no shared-daemon-session-recovery feature and no in-session reconnect through the actual fallback wiring."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "task",
+  "priority": 3,
+  "labels": [
+    "architecture",
+    "daemon",
+    "mcp-contract",
+    "review",
+    "testing"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "superseded",
+  "parent_id": "01a0910d-dce0-7440-a1b6-b1ed34981a72",
+  "child_requirement": "optional",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": "01a09140-22a7-7fd2-978e-f6193f217a1d",
+  "disposal_reason": "Continue as independent work. Created as an optional review child under w-b1ed34981a72 as required by the review workflow; that verified stream-pair fix is now complete. Engram's done/show receipt reports this optional child stranded and explicitly recommends detach. Preserve the creation/origin notes and keep this nonblocking Low follow-up actionable without reopening the satisfied parent.",
+  "completion": null
+}

@@ -1,0 +1,29 @@
+{
+  "id": "01a07d3e-9428-7c50-85ac-e08cf5cbe70e",
+  "external_ref": null,
+  "title": "Give Batch52 telemetry teardown a meaningful strict-cleanup contract",
+  "outcome": "Batch52 telemetry tests either exercise a real fixture-owned artifact/handle before strict deletion or use tolerant cleanup when only an empty temp directory exists.",
+  "acceptance": [
+    "The chosen cleanup mode remains deterministic under the full Windows gate.",
+    "The six Batch52 telemetry tests no longer present strict deletion of an always-empty root as handle-release evidence."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "task",
+  "priority": 2,
+  "labels": [
+    "review",
+    "temp-cleanup",
+    "testing"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "open",
+  "parent_id": null,
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": null
+}

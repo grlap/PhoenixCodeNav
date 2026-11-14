@@ -1,0 +1,32 @@
+{
+  "id": "01a07843-857a-7953-9909-40d1709627e3",
+  "external_ref": null,
+  "title": "Document ownership boundaries for the new NavigationTools partials",
+  "outcome": "Every tool-surface NavigationTools partial states its own concern boundary and the core partial describes only its retained ownership.",
+  "acceptance": [
+    "Each NavigationTools partial declaring MCP tools has an accurate Owns/Does-not-own summary",
+    "NavigationTools.cs ownership summary is narrowed to construction, state, and shared helpers without changing behavior"
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "task",
+  "priority": 3,
+  "labels": [
+    "agent-experience",
+    "architecture",
+    "maintainability",
+    "mcp-contract",
+    "review",
+    "structure"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "cancelled",
+  "parent_id": "01a07795-f400-71c2-a722-c534c5fb9bec",
+  "child_requirement": "optional",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": "Re-homed as required structure-track packet w-7fdc7a895050 per owner ruling after packet 4 review.",
+  "completion": null
+}

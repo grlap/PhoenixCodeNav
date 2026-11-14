@@ -1,0 +1,40 @@
+{
+  "id": "01a063dd-7470-70a3-98c9-6a8c447fa898",
+  "external_ref": null,
+  "title": "Pin Roslyn persistent syntax-index activation with a deterministic canary",
+  "outcome": "Pin Roslyn persistent syntax-index activation with a deterministic canary",
+  "acceptance": [
+    "Pin Roslyn persistent syntax-index activation with a deterministic canary is done"
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "task",
+  "priority": 1,
+  "labels": [],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "open",
+  "parent_id": null,
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": null,
+  "activity": {
+    "central": {
+      "d8b4c699f506e8c7ee377f0d63ead423785649eb1180fa11652fe7de9604e02f": {
+        "activity_id": "d8b4c699f506e8c7ee377f0d63ead423785649eb1180fa11652fe7de9604e02f",
+        "task_id": "01a063dd-7470-70a3-98c9-6a8c447fa898",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "fable",
+          "actor_kind": "agent"
+        },
+        "state": "released",
+        "state_revision": 2,
+        "event_id": "77738276fc462cb70f63562841164182b47940072d566743a0288434e7a9dc77"
+      }
+    }
+  }
+}

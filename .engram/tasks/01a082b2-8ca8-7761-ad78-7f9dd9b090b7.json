@@ -1,0 +1,57 @@
+{
+  "id": "01a082b2-8ca8-7761-ad78-7f9dd9b090b7",
+  "external_ref": null,
+  "title": "Generalize ordered MSBuild traversal, imports, and Choose projection",
+  "outcome": "The reusable evaluator owns ordered document traversal, imports, PropertyGroup and Choose while F#-specific item projection remains separate.",
+  "acceptance": [
+    "F#-specific compile/reference/package projection is behind language hooks and preserves all existing causes and facts.",
+    "Full gates pass and one dual-agent adversarial review completes without Critical or High findings.",
+    "Real pinned F# corpus comparison plus focused tests show no semantic-fact differences.",
+    "Shared traversal owns ordered PropertyGroup, Import/ImportGroup, Choose, document roles, import cycles and import budgets."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "task",
+  "priority": 1,
+  "labels": [
+    "architecture",
+    "csharp",
+    "fsharp",
+    "msbuild",
+    "semantic",
+    "semantic-correctness"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "completed",
+  "parent_id": "01a08293-8ab2-7ee0-876d-1fe9ef5192ee",
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": {
+    "summary": "Extracted reusable ordered bounded MSBuild traversal, preserved F# policy and stable causes, proved old/new corpus parity, added decisive ImportGroup coverage, and passed the complete quality/review gate.",
+    "completed_at": "2026-09-08T21:18:47.680347800Z",
+    "actor": {
+      "actor_id": "greg/codex",
+      "actor_kind": "agent"
+    }
+  },
+  "activity": {
+    "central": {
+      "6cf48ce9e8b824723437067660ddd8cc0934a9ddba241894bdb15afcb77878f5": {
+        "activity_id": "6cf48ce9e8b824723437067660ddd8cc0934a9ddba241894bdb15afcb77878f5",
+        "task_id": "01a082b2-8ca8-7761-ad78-7f9dd9b090b7",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "greg/codex",
+          "actor_kind": "agent"
+        },
+        "state": "finished",
+        "state_revision": 2,
+        "event_id": "009f8d7c55058298bb27090b133973bdbcc997d2cb3fd326bc90ce7145976ac6"
+      }
+    }
+  }
+}

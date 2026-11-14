@@ -1,0 +1,28 @@
+{
+  "id": "01a07213-a7ec-7f51-8304-30728007a8a5",
+  "external_ref": null,
+  "title": "Preserve compilation-preparation timing on degraded semantic calls",
+  "outcome": "Cancelled or degraded cold semantic calls include compilation-preparation wall time in timing.semanticColdStart.compilationMs.",
+  "acceptance": [
+    "A cancelled cold references regression proves compilationMs includes the preparation wall published by PrepareCompilationsAsync."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "bug",
+  "priority": 2,
+  "labels": [
+    "mcp-contract",
+    "review",
+    "semantic"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "open",
+  "parent_id": null,
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": null
+}

@@ -1,0 +1,45 @@
+{
+  "id": "01a1b4b8-ffd4-7672-8e5b-a8d72144f3dc",
+  "external_ref": null,
+  "title": "Restore ordinal-sort discrimination in F# multi-TFM targetFrameworksScanned tests",
+  "outcome": "Restore ordinal-sort discrimination in F# multi-TFM targetFrameworksScanned tests",
+  "acceptance": [
+    "The three multi-TFM semantic fixtures declare netstandard2.1 before net10.0 while retaining the expected ordinal order net10.0 then netstandard2.1, preserving decisive deduplication/filter assertions."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "task",
+  "priority": 2,
+  "labels": [
+    "infrastructure",
+    "net10",
+    "review",
+    "testing"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "open",
+  "parent_id": "01a1b410-2859-7701-8df6-27699626ebef",
+  "child_requirement": "optional",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": null,
+  "activity": {
+    "central": {
+      "f60a8a8444a743418928b6431f439424": {
+        "activity_id": "f60a8a8444a743418928b6431f439424",
+        "task_id": "01a1b4b8-ffd4-7672-8e5b-a8d72144f3dc",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "greg/codex",
+          "actor_kind": "agent"
+        },
+        "state": "started",
+        "state_revision": 1,
+        "event_id": "f60a8a8444a743418928b6431f439424"
+      }
+    }
+  }
+}

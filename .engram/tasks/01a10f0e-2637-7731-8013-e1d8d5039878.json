@@ -1,0 +1,35 @@
+{
+  "id": "01a10f0e-2637-7731-8013-e1d8d5039878",
+  "external_ref": null,
+  "title": "Honor external MCP workspace overrides in prerequisite checkout checks",
+  "outcome": "Honor external MCP workspace overrides in prerequisite checkout checks",
+  "acceptance": [
+    "Preparation resolves Roslyn/FSharp checkout paths from PHOENIX_ROSLYN_WORKSPACE/PHOENIX_FSHARP_WORKSPACE then baseline.defaultWorkspace, matching normal harness execution.",
+    "Pin/baseline/clean-checkout checks still run against the actual chosen workspace; no infrastructure tests added."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "task",
+  "priority": 3,
+  "labels": [
+    "architecture",
+    "csharp",
+    "fsharp",
+    "index-freshness",
+    "msbuild",
+    "review",
+    "semantic",
+    "semantic-correctness",
+    "testing"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "open",
+  "parent_id": "01a10ebb-ede1-7691-974d-2323afd3d8fd",
+  "child_requirement": "optional",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": null
+}

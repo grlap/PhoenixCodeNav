@@ -1,0 +1,30 @@
+{
+  "id": "01a0720e-7aae-7a81-907d-61dfc0fe2446",
+  "external_ref": null,
+  "title": "Pin the netstandard.library fallback used by F# compatibility tests",
+  "outcome": "The netstandard2.0 end-to-end tests have a deterministic declared precondition or repository-restored reference source.",
+  "acceptance": [
+    "A clean test environment reports a precise prerequisite failure or restores the required netstandard.library reference directory before running compatibility tests."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "task",
+  "priority": 2,
+  "labels": [
+    "fsharp",
+    "mcp-contract",
+    "review",
+    "semantic",
+    "testing"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "open",
+  "parent_id": "01a070c5-95e1-7482-8cd1-326c967e5cb4",
+  "child_requirement": "optional",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": null
+}

@@ -1,0 +1,66 @@
+{
+  "id": "01a063dd-836b-7942-9094-a0b1986c7314",
+  "external_ref": null,
+  "title": "Make search_symbol language-scoped with local partiality",
+  "outcome": "Agents can scope symbol search by language, and the response reports only coverage gaps relevant to the effective language and search scope.",
+  "acceptance": [
+    "A healthy C#-only search is not partial because unrelated F# indexing failed.",
+    "Mixed-language and all-language searches still disclose every relevant coverage gap and never turn an incomplete miss into an authoritative absence.",
+    "The capability is represented by its own features[] identifier and BuildInfo.Version is bumped.",
+    "search_symbol accepts an optional language scope and echoes the applied scope."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "bug",
+  "priority": 1,
+  "labels": [
+    "agent-experience",
+    "mcp-contract",
+    "semantic"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "completed",
+  "parent_id": null,
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": {
+    "summary": "Completed language-scoped search_symbol contract and closeout coverage.",
+    "completed_at": "2026-09-04T17:07:35.493138200Z",
+    "actor": {
+      "actor_id": "greg/codex",
+      "actor_kind": "agent"
+    }
+  },
+  "activity": {
+    "central": {
+      "24c025082a2d57b69a3fb86983cc7d5723004076d0631dcf91a589c80848f13d": {
+        "activity_id": "24c025082a2d57b69a3fb86983cc7d5723004076d0631dcf91a589c80848f13d",
+        "task_id": "01a063dd-836b-7942-9094-a0b1986c7314",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "greg/codex",
+          "actor_kind": "agent"
+        },
+        "state": "finished",
+        "state_revision": 2,
+        "event_id": "7d6c76028e1eff41e74dea2b4c67068895c6116ff96eb28f9048b445dc9f3f8b"
+      },
+      "798d8ea92b78f50d6b6cd6cede8446c8212a51cad900ac78cd96682ba3e0c28b": {
+        "activity_id": "798d8ea92b78f50d6b6cd6cede8446c8212a51cad900ac78cd96682ba3e0c28b",
+        "task_id": "01a063dd-836b-7942-9094-a0b1986c7314",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "fable",
+          "actor_kind": "agent"
+        },
+        "state": "released",
+        "state_revision": 2,
+        "event_id": "c1c3d8bbff69d3020238d60aedee9233aa41b654f2a28565a3c31e3672dbec54"
+      }
+    }
+  }
+}

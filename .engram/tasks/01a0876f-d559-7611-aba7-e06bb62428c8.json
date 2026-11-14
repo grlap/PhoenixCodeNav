@@ -1,0 +1,53 @@
+{
+  "id": "01a0876f-d559-7611-aba7-e06bb62428c8",
+  "external_ref": null,
+  "title": "Advertise session recovery in unavailable capabilities",
+  "outcome": "Advertise session recovery in unavailable capabilities",
+  "acceptance": [
+    "enabled unavailable payload contains feature; terminal shim does not."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "bug",
+  "priority": 2,
+  "labels": [
+    "agent-experience",
+    "daemon",
+    "mcp-contract",
+    "recovery",
+    "review"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "completed",
+  "parent_id": "01a08735-5bf6-7463-a954-43e838d04c76",
+  "child_requirement": "optional",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": {
+    "summary": "Enabled unavailable manifest advertises shared-daemon-session-recovery while terminal shim does not; direct and actual same-client pre-recovery tests pass. Codex's original Medium verified fixed by both original reviewers. New presence/prose-after-permanent-refusal Low recorded separately, not hidden by completion.",
+    "completed_at": "2026-09-09T18:59:37.033803Z",
+    "actor": {
+      "actor_id": "greg/codex",
+      "actor_kind": "agent"
+    }
+  },
+  "activity": {
+    "central": {
+      "9f647d9dc3c7ff4c8b3630a417f0bb2d332f69c4a8d110a8d24b8d7aa88ad7e1": {
+        "activity_id": "9f647d9dc3c7ff4c8b3630a417f0bb2d332f69c4a8d110a8d24b8d7aa88ad7e1",
+        "task_id": "01a0876f-d559-7611-aba7-e06bb62428c8",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "greg/codex",
+          "actor_kind": "agent"
+        },
+        "state": "finished",
+        "state_revision": 2,
+        "event_id": "888d9b81ecaeabb86b69a0fddf0921518c6702e8796920955b944f5fb36a8eef"
+      }
+    }
+  }
+}

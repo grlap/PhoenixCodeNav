@@ -1,0 +1,52 @@
+{
+  "id": "01a08ea9-6a1d-7b81-a8ea-46d8e63181d4",
+  "external_ref": null,
+  "title": "Clear recovery connection state when cancellation forwarding loses transport",
+  "outcome": "Clear recovery connection state when cancellation forwarding loses transport",
+  "acceptance": [
+    "When cancellation forwarding fails with IOException, the matching failed recovery connection is invalidated and HasEstablishedConnection becomes false while caller cancellation is preserved; successful cancellation forwarding retains its established connection, and a concurrent replacement connection is not cleared."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "bug",
+  "priority": 2,
+  "labels": [
+    "daemon",
+    "mcp-contract",
+    "recovery",
+    "review"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "completed",
+  "parent_id": null,
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": {
+    "summary": "Matching-client invalidation now handles cancellation-forwarding transport failures as well as ordinary exchange loss, preserving caller cancellation through disposal errors, retaining successful forwarding, distinguishing shutdown-only OCE and preserving a concurrent replacement. Corrected RED and six independent mutation controls are archived; final full suite includes decisive synthetic cancellation state tests and existing real-process 4/0/4 exit controls. This is compositional evidence, not an end-to-end cancellation-failure process-exit reproduction. Final complete gates and fresh Codex/Claude full-union review passed. New Low CLI test/doc follow-up is tracked separately as w-129583275429. Implemented and reviewed; not committed or pushed.",
+    "completed_at": "2026-09-11T05:42:16.098752400Z",
+    "actor": {
+      "actor_id": "greg/codex",
+      "actor_kind": "agent"
+    }
+  },
+  "activity": {
+    "central": {
+      "4f5c31439ab1f6535f83179ffba39edeb77361695ae975479b57387433d39fad": {
+        "activity_id": "4f5c31439ab1f6535f83179ffba39edeb77361695ae975479b57387433d39fad",
+        "task_id": "01a08ea9-6a1d-7b81-a8ea-46d8e63181d4",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "greg/codex",
+          "actor_kind": "agent"
+        },
+        "state": "finished",
+        "state_revision": 2,
+        "event_id": "ba039f5a0c8068e8707e7d0adc1dca79e488fe0940b57366994f7c01c4c7b1f8"
+      }
+    }
+  }
+}

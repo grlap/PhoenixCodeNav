@@ -1,0 +1,30 @@
+{
+  "id": "01a07514-3b45-7da3-b098-9d93af1faf4b",
+  "external_ref": null,
+  "title": "Assert the returned caller survives F# diagnostic-pressure budgeting",
+  "outcome": "Assert the returned caller survives F# diagnostic-pressure budgeting",
+  "acceptance": [
+    "The bounded callers diagnostic-pressure regression asserts one retained caller with the expected identity and call site in addition to preserving totals and diagnostic truncation"
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "task",
+  "priority": 3,
+  "labels": [
+    "fsharp",
+    "mcp-contract",
+    "review",
+    "semantic",
+    "testing"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "superseded",
+  "parent_id": "01a063dd-580b-7480-8d28-895853574bf6",
+  "child_requirement": "optional",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": "01a0751d-0634-76e0-9788-8eccc563e48b",
+  "disposal_reason": "Continue as independent optional review follow-up after v0.12.88 delivery; the production response was verified to retain the caller, while this task preserves the missing explicit regression assertion and its provenance.",
+  "completion": null
+}

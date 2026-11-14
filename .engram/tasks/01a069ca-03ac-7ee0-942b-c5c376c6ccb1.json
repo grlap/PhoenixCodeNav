@@ -1,0 +1,27 @@
+{
+  "id": "01a069ca-03ac-7ee0-942b-c5c376c6ccb1",
+  "external_ref": null,
+  "title": "Strengthen the reserved-CLI-name contract test against partial MCP schema collapse",
+  "outcome": "The reserved CLI-name contract test fails if properties disappear from most parameter-bearing MCP schemas, not only when every property disappears.",
+  "acceptance": [
+    "The test counts tools with a properties object and asserts the expected parameter-bearing coverage while continuing to accept known parameterless tools."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "bug",
+  "priority": 3,
+  "labels": [
+    "review",
+    "testing"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "open",
+  "parent_id": null,
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": null
+}

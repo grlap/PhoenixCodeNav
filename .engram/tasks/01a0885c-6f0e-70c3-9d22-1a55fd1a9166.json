@@ -1,0 +1,33 @@
+{
+  "id": "01a0885c-6f0e-70c3-9d22-1a55fd1a9166",
+  "external_ref": null,
+  "title": "Clarify structural versus compiler coverage in the copy-local reference theory",
+  "outcome": "Clarify structural versus compiler coverage in the copy-local reference theory",
+  "acceptance": [
+    "Retain both owner-extension structural controls; any C# compiler-exclusion claim must use the real C# compiler model and its own decisive assertion, not EvaluateBoundedProject. No C# ReferenceOutputAssembly implementation is claimed by the current batch.",
+    "Separate or clearly name structural build-edge tests for both csproj and fsproj owners and the F#-only ReferenceOutputAssembly=false compiler-exclusion test."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "task",
+  "priority": 3,
+  "labels": [
+    "architecture",
+    "csharp",
+    "fsharp",
+    "msbuild",
+    "review",
+    "semantic-correctness",
+    "testing"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "open",
+  "parent_id": "01a0882a-126b-7f81-8a4b-3f1504bf2d37",
+  "child_requirement": "optional",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": null
+}

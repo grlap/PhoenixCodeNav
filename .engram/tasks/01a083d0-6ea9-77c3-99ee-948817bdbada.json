@@ -1,0 +1,32 @@
+{
+  "id": "01a083d0-6ea9-77c3-99ee-948817bdbada",
+  "external_ref": null,
+  "title": "Rename msbuild_exists_inputs.source_file_id to reflect owning-project identity",
+  "outcome": "Rename msbuild_exists_inputs.source_file_id to reflect owning-project identity",
+  "acceptance": [
+    "Column and ReplaceMsBuildExistsPaths parameter clearly name owning-project file identity, with schema compatibility handled and existing Exists regressions passing."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "task",
+  "priority": 3,
+  "labels": [
+    "architecture",
+    "csharp",
+    "fsharp",
+    "msbuild",
+    "review",
+    "semantic",
+    "semantic-correctness"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "open",
+  "parent_id": "01a08395-4315-7a03-8dfa-9c66434a9eb6",
+  "child_requirement": "optional",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": null
+}

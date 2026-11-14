@@ -1,0 +1,65 @@
+{
+  "id": "01a06e7e-4ae6-7fc0-aac4-a5fc6e17934c",
+  "external_ref": null,
+  "title": "Complete semantic cold-start timing on every advertised response and telemetry path",
+  "outcome": "Every response path advertised by semantic-cold-start-phase-timing carries the published timing snapshot, and every terminal semantic attempt emits exactly one matching semanticOp record.",
+  "acceptance": [
+    "Documentation-comment-ID candidate and not-found terminal paths preserve timing and emit exactly one corresponding semanticOp record.",
+    "Exact and automatic-degraded definition, references, implementations, and type_hierarchy responses expose timing.semanticColdStart consistently.",
+    "Focused contract tests prove response-to-telemetry equality, warm cold:false semantics, and hard response-byte budgets."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "bug",
+  "priority": 1,
+  "labels": [
+    "mcp-contract",
+    "review",
+    "semantic"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "completed",
+  "parent_id": "01a063dd-5ecb-7000-814f-7cc52012253b",
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": {
+    "summary": "Completed semantic cold-start timing across all advertised C# navigation response and telemetry paths.",
+    "completed_at": "2026-09-05T00:02:48.363932400Z",
+    "actor": {
+      "actor_id": "greg/codex",
+      "actor_kind": "agent"
+    }
+  },
+  "activity": {
+    "central": {
+      "5bc72429e5a081a0e6cbcb697c907890c379370fdd8946a31f53257f404cd651": {
+        "activity_id": "5bc72429e5a081a0e6cbcb697c907890c379370fdd8946a31f53257f404cd651",
+        "task_id": "01a06e7e-4ae6-7fc0-aac4-a5fc6e17934c",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "greg/codex",
+          "actor_kind": "agent"
+        },
+        "state": "finished",
+        "state_revision": 2,
+        "event_id": "abc2235318566b62fcb54cd778067820b20ae837bd0e7ffee47e4f7cf091a104"
+      },
+      "fd6d2f84f772cc16834458f85dae0b73892940a145dbc7d036cc34a0ab174731": {
+        "activity_id": "fd6d2f84f772cc16834458f85dae0b73892940a145dbc7d036cc34a0ab174731",
+        "task_id": "01a06e7e-4ae6-7fc0-aac4-a5fc6e17934c",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "greg/codex",
+          "actor_kind": "agent"
+        },
+        "state": "started",
+        "state_revision": 1,
+        "event_id": "fd6d2f84f772cc16834458f85dae0b73892940a145dbc7d036cc34a0ab174731"
+      }
+    }
+  }
+}

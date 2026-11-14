@@ -1,0 +1,30 @@
+{
+  "id": "01a0876f-d5f5-7742-a89e-b7abff6d70a2",
+  "external_ref": null,
+  "title": "Return success exit status after a recovered shim session",
+  "outcome": "Return success exit status after a recovered shim session",
+  "acceptance": [
+    "completed recovered session exits0; never-recovered stays4. Deferred from current correction round."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "bug",
+  "priority": 3,
+  "labels": [
+    "agent-experience",
+    "daemon",
+    "mcp-contract",
+    "recovery",
+    "review"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "superseded",
+  "parent_id": "01a08735-5bf6-7463-a954-43e838d04c76",
+  "child_requirement": "optional",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": "01a0878d-bcc4-7b40-b666-6910452d64bd",
+  "disposal_reason": "Original dual review verified the implementation complete; this nonblocking residual remains open and must be independently actionable after its parent completion. Preserve original findings, provenance and latest qualifications.",
+  "completion": null
+}

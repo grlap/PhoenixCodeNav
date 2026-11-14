@@ -1,0 +1,51 @@
+{
+  "id": "01a0739e-a7f6-7d03-aec2-5dfca0ae494f",
+  "external_ref": null,
+  "title": "Preserve F# workspace-reference completeness across evaluated project-reference paths",
+  "outcome": "Workspace-dependent F# references discover property-expanded source ProjectReference consumers or disclose an explicit lower bound when evaluated graph authority is incomplete.",
+  "acceptance": [
+    "A public references regression using $(DependencyDir)/Library.fsproj includes the consumer without false workspaceComplete, or explicitly reports the omitted scope as a lower bound."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "bug",
+  "priority": 1,
+  "labels": [
+    "index-freshness",
+    "review",
+    "semantic-correctness"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "completed",
+  "parent_id": "01a063dd-56a1-7692-a1af-0a9651c8c506",
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": {
+    "summary": "Evaluated ProjectReference authority now augments persisted F# reverse edges from one pinned snapshot and fails honestly to unknown/lower-bound coverage.",
+    "completed_at": "2026-09-05T23:03:24.372710500Z",
+    "actor": {
+      "actor_id": "greg/codex",
+      "actor_kind": "agent"
+    }
+  },
+  "activity": {
+    "central": {
+      "b0ca6dd3900a17bfff069c2ad6cf0ddb798e83a17e7b74b55ac4b8c753fd6b48": {
+        "activity_id": "b0ca6dd3900a17bfff069c2ad6cf0ddb798e83a17e7b74b55ac4b8c753fd6b48",
+        "task_id": "01a0739e-a7f6-7d03-aec2-5dfca0ae494f",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "greg/codex",
+          "actor_kind": "agent"
+        },
+        "state": "finished",
+        "state_revision": 2,
+        "event_id": "199d795f42b48ccc5f0920eb5284b142d3206bb706b77854899abfec52183ade"
+      }
+    }
+  }
+}

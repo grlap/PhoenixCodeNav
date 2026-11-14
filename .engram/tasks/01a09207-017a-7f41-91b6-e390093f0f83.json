@@ -1,0 +1,28 @@
+{
+  "id": "01a09207-017a-7f41-91b6-e390093f0f83",
+  "external_ref": null,
+  "title": "Distinguish retirement handshake timeout advice from writer takeover timeout",
+  "outcome": "A retirement handshake deadline produces diagnosis and recovery advice appropriate to handshake failure, or the existing takeover classification is explicitly justified without implying the two-minute drain deadline expired.",
+  "acceptance": [
+    "A real proxy retirement-handshake timeout test asserts the chosen cause and accurate recovery advice, separately from caller cancellation and writer-drain timeout."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "bug",
+  "priority": 3,
+  "labels": [
+    "daemon",
+    "mcp-contract",
+    "review"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "open",
+  "parent_id": null,
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": null
+}

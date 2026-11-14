@@ -1,0 +1,53 @@
+{
+  "id": "01a07223-62dd-74f3-bc1d-645b54ff3ff8",
+  "external_ref": null,
+  "title": "Pin the netstandard cumulative-define cap with a negative case",
+  "outcome": "Pin the netstandard cumulative-define cap with a negative case",
+  "acceptance": [
+    "The cumulative-define regression proves netstandard2.0 does not define NETSTANDARD2_1_OR_GREATER and selects the #else declaration."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "task",
+  "priority": 2,
+  "labels": [
+    "fsharp",
+    "mcp-contract",
+    "review",
+    "semantic",
+    "testing"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "completed",
+  "parent_id": "01a070c5-95e1-7482-8cd1-326c967e5cb4",
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": {
+    "summary": "The cumulative NETSTANDARD define theory now includes a negative netstandard2.0/NETSTANDARD2_1_OR_GREATER branch assertion.",
+    "completed_at": "2026-09-05T15:17:37.446026300Z",
+    "actor": {
+      "actor_id": "greg/codex",
+      "actor_kind": "agent"
+    }
+  },
+  "activity": {
+    "central": {
+      "fe4d74c2662b886145cb7bc2697acf50174994f0f7febf223d43369f1ca05f41": {
+        "activity_id": "fe4d74c2662b886145cb7bc2697acf50174994f0f7febf223d43369f1ca05f41",
+        "task_id": "01a07223-62dd-74f3-bc1d-645b54ff3ff8",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "greg/codex",
+          "actor_kind": "agent"
+        },
+        "state": "finished",
+        "state_revision": 2,
+        "event_id": "d6199d93879e4c2095a6297b9a90ca883ae9e4b3233d2094ddf8fc97fb911413"
+      }
+    }
+  }
+}

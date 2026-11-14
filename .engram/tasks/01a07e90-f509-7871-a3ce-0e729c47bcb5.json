@@ -1,0 +1,30 @@
+{
+  "id": "01a07e90-f509-7871-a3ce-0e729c47bcb5",
+  "external_ref": null,
+  "title": "Record Roslyn persistent-storage lifetime evidence in the Unix write-cache investigation",
+  "outcome": "Record Roslyn persistent-storage lifetime evidence in the Unix write-cache investigation",
+  "acceptance": [
+    "Document the pinned-source evidence for per-workspace storage creation, absent storage disposal/cancellation, and replacement without draining; distinguish source-based lifetime inference from shipping-runtime measurements.",
+    "Explain cumulative sequential-workspace exposure and require A1 to retain direct storage references rather than assume workspace disposal ends storage lifetime."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "task",
+  "priority": 2,
+  "labels": [
+    "documentation",
+    "macos",
+    "review",
+    "roslyn"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "open",
+  "parent_id": "01a07e3d-bac1-79d0-adab-a74a1fcce07a",
+  "child_requirement": "optional",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": null
+}

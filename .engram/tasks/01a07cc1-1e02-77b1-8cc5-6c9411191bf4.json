@@ -1,0 +1,30 @@
+{
+  "id": "01a07cc1-1e02-77b1-8cc5-6c9411191bf4",
+  "external_ref": null,
+  "title": "Surface Git stderr from failing test-side invocations",
+  "outcome": "Surface Git stderr from failing test-side invocations",
+  "acceptance": [
+    "A failing TestGit invocation reports the exact Git command, working directory, exit status, and captured stderr.",
+    "The 2026-09-07 Batch25 setup failure class can be classified from gate output without reproducing it.",
+    "The helper remains single-attempt and does not retry failed Git mutations."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "bug",
+  "priority": 2,
+  "labels": [
+    "diagnostics",
+    "infrastructure",
+    "testing"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "open",
+  "parent_id": null,
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": null
+}

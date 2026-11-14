@@ -1,0 +1,53 @@
+{
+  "id": "01a07500-0c69-71e3-b097-c75b1f676d3f",
+  "external_ref": null,
+  "title": "Preserve function-valued pipeline edges in F# callers and callees",
+  "outcome": "Preserve function-valued pipeline edges in F# callers and callees",
+  "acceptance": [
+    "A decisive regression proves callers and callees recognize |> , <| , and ||> function-valued operands as pipelineApplication while a bare function value remains excluded from callees and firstClassReference in callers"
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "bug",
+  "priority": 1,
+  "labels": [
+    "fsharp",
+    "mcp-contract",
+    "review",
+    "semantic",
+    "semantic-correctness"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "completed",
+  "parent_id": "01a063dd-580b-7480-8d28-895853574bf6",
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": {
+    "summary": "Fixed and committed function-valued pipeline edges in F# callers and callees in 8a0ede51693945c528117d1b57dfd3662e341385.",
+    "completed_at": "2026-09-06T05:06:58.383445600Z",
+    "actor": {
+      "actor_id": "greg/codex",
+      "actor_kind": "agent"
+    }
+  },
+  "activity": {
+    "central": {
+      "efe4e452e84c644c8167b60459b817febf710295d616c097f342e5ecea1ac5e1": {
+        "activity_id": "efe4e452e84c644c8167b60459b817febf710295d616c097f342e5ecea1ac5e1",
+        "task_id": "01a07500-0c69-71e3-b097-c75b1f676d3f",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "greg/codex",
+          "actor_kind": "agent"
+        },
+        "state": "finished",
+        "state_revision": 2,
+        "event_id": "0b40da606c5ba3fbfb6fac172435aafed6a4753affe068cec4fa0d07a1b7ce4d"
+      }
+    }
+  }
+}

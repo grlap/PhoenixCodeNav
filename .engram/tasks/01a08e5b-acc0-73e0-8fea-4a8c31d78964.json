@@ -1,0 +1,31 @@
+{
+  "id": "01a08e5b-acc0-73e0-8fea-4a8c31d78964",
+  "external_ref": null,
+  "title": "Scope the proxy-failure test to its payload contract or exercise the generic catch",
+  "outcome": "Scope the proxy-failure test to its payload contract or exercise the generic catch",
+  "acceptance": [
+    "The proxy-failure test is named for the payload contract it actually proves, or a decisive process-level generic pre-relay exception test verifies the terminal shim without session recovery."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "task",
+  "priority": 3,
+  "labels": [
+    "agent-experience",
+    "daemon",
+    "mcp-contract",
+    "recovery",
+    "review",
+    "testing"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "superseded",
+  "parent_id": "01a0878d-bc91-7043-8e80-f5e7f85e0bfb",
+  "child_requirement": "optional",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": "01a08e7e-53a4-7b31-971d-29d24fa196e5",
+  "disposal_reason": "Greg requested implementation of these follow-ups after their optional parents completed; continue independently while preserving original review provenance.",
+  "completion": null
+}

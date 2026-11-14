@@ -1,0 +1,56 @@
+{
+  "id": "01a07342-ef14-7491-9b4f-c6aaf3b61c65",
+  "external_ref": null,
+  "title": "Deliver w-ffa06c2a8671: review + check-in of the Windows destination-identity fix",
+  "outcome": "The reviewed v0.12.85 daemon destination-identity fix is byte-inspected, independently re-reviewed, committed on the default branch with exact pathspecs, and not pushed.",
+  "acceptance": [
+    "Fable inspects the frozen 13-path packet with per-path deltas and the complete green gate line.",
+    "Fable receives and clears the precommit audit record before any commit.",
+    "Only the 13 owned paths are committed on the default branch; README.md and all Website-owner paths remain excluded; no push occurs.",
+    "The final frozen bytes receive a complete Codex and Claude adversarial review with no Critical or High findings.",
+    "The work item is marked done only after the exact-pathspec commit exists."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "task",
+  "priority": 1,
+  "labels": [
+    "daemon",
+    "mcp-contract",
+    "review",
+    "windows"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "completed",
+  "parent_id": null,
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": {
+    "summary": "Delivered commit 1bee7b5: exact reviewed 13-path v0.12.85 daemon destination-identity fix; all gates green; Codex and Claude final review CLEAN; Fable byte inspection CLEARED; README/Website excluded; no push.",
+    "completed_at": "2026-09-05T20:33:27.942513900Z",
+    "actor": {
+      "actor_id": "greg/codex",
+      "actor_kind": "agent"
+    }
+  },
+  "activity": {
+    "central": {
+      "aec9fdc66b7f419544121ebb762cf772adb5118bbb80abf2e47a3d704fe4d761": {
+        "activity_id": "aec9fdc66b7f419544121ebb762cf772adb5118bbb80abf2e47a3d704fe4d761",
+        "task_id": "01a07342-ef14-7491-9b4f-c6aaf3b61c65",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "greg/codex",
+          "actor_kind": "agent"
+        },
+        "state": "finished",
+        "state_revision": 2,
+        "event_id": "de50becc87067aeee925e8dad28c61fac1f8174e05d64af0eee3023778156bb5"
+      }
+    }
+  }
+}

@@ -1,0 +1,52 @@
+{
+  "id": "01a088ef-a76f-79f3-b14d-6cb5457e803c",
+  "external_ref": null,
+  "title": "Support absent import sentinels without conflating incomplete MSBuild properties",
+  "outcome": "Support absent import sentinels without conflating incomplete MSBuild properties",
+  "acceptance": [
+    "End-to-end closure requires the real late Directory.Build.targets idiom starting with an ABSENT sentinel: evaluate the guarded reference-bearing import, assign the flag to true, retain the intended dependency in the semantic result, and skip the distinct second guarded import with no unresolved-property or ordering refusal. Changing the error code or passing only a seeded/early variant does not satisfy this criterion.",
+    "The early flag-only absent-state repro successfully evaluates the import condition, records the flag assignment, and skips the distinct second guarded import, matching native MSBuild; explicit true still skips both and prior incomplete assignments are not silently converted to absent values."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "bug",
+  "priority": 2,
+  "labels": [
+    "fsharp",
+    "msbuild",
+    "semantic-correctness"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "completed",
+  "parent_id": null,
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": {
+    "summary": "Delivered and pushed in 06c15fc64130a098da6b1852523c4bfb9996d914 after Greg's explicit commit-and-push authorization. Coupled absent-late import/reference/sentinel acceptance and refusal controls verified; sameoriginaldualreview CLEAN, fullgate GREEN; deferred Low followups remain open.",
+    "completed_at": "2026-09-10T03:12:41.011620400Z",
+    "actor": {
+      "actor_id": "greg/codex",
+      "actor_kind": "agent"
+    }
+  },
+  "activity": {
+    "central": {
+      "2467f61a7d9db3fcf42a33007c3418dfa88f71423c711aff19714c6c9a2fb9f5": {
+        "activity_id": "2467f61a7d9db3fcf42a33007c3418dfa88f71423c711aff19714c6c9a2fb9f5",
+        "task_id": "01a088ef-a76f-79f3-b14d-6cb5457e803c",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "greg/codex",
+          "actor_kind": "agent"
+        },
+        "state": "finished",
+        "state_revision": 2,
+        "event_id": "bb35dd6dbef3e84898901936ddac478f917abaae2d18ce2abf52d9d35de6a7b2"
+      }
+    }
+  }
+}

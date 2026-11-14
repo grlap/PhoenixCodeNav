@@ -1,0 +1,54 @@
+{
+  "id": "01a08884-fe71-7fb2-9fce-3c1f27767b21",
+  "external_ref": null,
+  "title": "Preserve capabilities growth margin after adding shared path context",
+  "outcome": "Preserve capabilities growth margin after adding shared path context",
+  "acceptance": [
+    "CapabilitiesDynamicTextUsesExactUtf8BoundaryAndReportsTruncation passes with the shared path-context entry retained and no budget changes."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "bug",
+  "priority": 2,
+  "labels": [
+    "architecture",
+    "csharp",
+    "fsharp",
+    "msbuild",
+    "review",
+    "semantic-correctness"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "completed",
+  "parent_id": "01a08871-6a84-7aa1-9265-c202f2be4cd9",
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": {
+    "summary": "Shortened only the new path-context feature summary (path families → paths, assignment-time capture → RHS capture), preserving all claims and stable ID. The unchanged CapabilitiesDynamicTextUsesExactUtf8BoundaryAndReportsTruncation now passes: artifacts/msbuild-path-context/path-context-margin-green.trx 1/1. No limit change. Full enlarged-union validation/review remains required by parent.",
+    "completed_at": "2026-09-09T23:34:15.081137600Z",
+    "actor": {
+      "actor_id": "greg/codex",
+      "actor_kind": "agent"
+    }
+  },
+  "activity": {
+    "central": {
+      "28ce469f60ced13f2eebd97ce05ff5d39e2c4dedd0692d9f17cdcad9e07a8e61": {
+        "activity_id": "28ce469f60ced13f2eebd97ce05ff5d39e2c4dedd0692d9f17cdcad9e07a8e61",
+        "task_id": "01a08884-fe71-7fb2-9fce-3c1f27767b21",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "greg/codex",
+          "actor_kind": "agent"
+        },
+        "state": "finished",
+        "state_revision": 2,
+        "event_id": "318957aadb25b873f0e44c57a913e2292aa6f0fc40125cc6362ca2f7b0116ffe"
+      }
+    }
+  }
+}

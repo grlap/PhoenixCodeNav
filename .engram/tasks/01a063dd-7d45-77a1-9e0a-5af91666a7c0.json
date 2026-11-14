@@ -1,0 +1,43 @@
+{
+  "id": "01a063dd-7d45-77a1-9e0a-5af91666a7c0",
+  "external_ref": null,
+  "title": "Correct Engram ls and show shell examples",
+  "outcome": "Repository instructions show executable Engram list and show commands rather than an invalid shell pipeline.",
+  "acceptance": [
+    "AGENTS.md and CLAUDE.md put engram work ls and engram work show REF on separate command lines"
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "task",
+  "priority": 3,
+  "labels": [
+    "architecture",
+    "review"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "open",
+  "parent_id": "01a063dd-7b2f-78e2-b2cc-385fd932b308",
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": null,
+  "activity": {
+    "central": {
+      "565d958bc5bf9c58dc7efb12feec0bc6e5864370ebcd8b73ff7d5b4b4f248328": {
+        "activity_id": "565d958bc5bf9c58dc7efb12feec0bc6e5864370ebcd8b73ff7d5b4b4f248328",
+        "task_id": "01a063dd-7d45-77a1-9e0a-5af91666a7c0",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "fable",
+          "actor_kind": "agent"
+        },
+        "state": "released",
+        "state_revision": 2,
+        "event_id": "b9668fae0d042b3982bc128902e5ffa3da3d1e8081699301ba0fd912d8353bb0"
+      }
+    }
+  }
+}

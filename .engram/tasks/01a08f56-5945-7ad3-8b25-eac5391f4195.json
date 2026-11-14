@@ -1,0 +1,51 @@
+{
+  "id": "01a08f56-5945-7ad3-8b25-eac5391f4195",
+  "external_ref": null,
+  "title": "Keep typed outcome-unknown result when post-dispatch connection cleanup fails",
+  "outcome": "A post-dispatch transport loss still returns daemon_request_outcome_unknown even when disposal raises a non-transport exception.",
+  "acceptance": [
+    "A failDispose regression on the dispatched failure path retains the typed non-retryable outcome-unknown response, never replays the original call, clears only the failed connection, and permits the next call to use a working connection."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "bug",
+  "priority": 3,
+  "labels": [
+    "daemon",
+    "mcp-contract",
+    "review"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "completed",
+  "parent_id": null,
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": {
+    "summary": "Post-dispatch client/stream cleanup preserves typed non-retryable uncertain outcome, no replay and replacement identity; test-first and mutation evidence, full gates and fresh dual review complete. Distinct in-flight shutdown Medium remains tracked separately.",
+    "completed_at": "2026-09-11T08:07:12.040592700Z",
+    "actor": {
+      "actor_id": "greg/codex",
+      "actor_kind": "agent"
+    }
+  },
+  "activity": {
+    "central": {
+      "e915e52a85eb60499688ffdbd5bb11ee61a43f775e36d4d50c189610281b5c4e": {
+        "activity_id": "e915e52a85eb60499688ffdbd5bb11ee61a43f775e36d4d50c189610281b5c4e",
+        "task_id": "01a08f56-5945-7ad3-8b25-eac5391f4195",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "greg/codex",
+          "actor_kind": "agent"
+        },
+        "state": "finished",
+        "state_revision": 2,
+        "event_id": "a5a7503f759a9ece429dc736a0674b2d561da2b5101cc92abcfdd30ea0d1efa8"
+      }
+    }
+  }
+}

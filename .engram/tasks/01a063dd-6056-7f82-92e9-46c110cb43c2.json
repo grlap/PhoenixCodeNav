@@ -1,0 +1,40 @@
+{
+  "id": "01a063dd-6056-7f82-92e9-46c110cb43c2",
+  "external_ref": null,
+  "title": "Attribute references query-phase latency",
+  "outcome": "Attribute references query-phase latency",
+  "acceptance": [
+    "Attribute references query-phase latency is done"
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "task",
+  "priority": 1,
+  "labels": [],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "open",
+  "parent_id": "01a063dd-5c87-7403-9486-fddc946bf93b",
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": null,
+  "activity": {
+    "central": {
+      "526a6baa85408a130744471fe3fdf52d0be390155b0887d1ddff53bb769bdf78": {
+        "activity_id": "526a6baa85408a130744471fe3fdf52d0be390155b0887d1ddff53bb769bdf78",
+        "task_id": "01a063dd-6056-7f82-92e9-46c110cb43c2",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "fable",
+          "actor_kind": "agent"
+        },
+        "state": "released",
+        "state_revision": 2,
+        "event_id": "33993b05eeaea2e46fa34d665e8c0592bd7c153c4d04d136f91731529760e5fc"
+      }
+    }
+  }
+}

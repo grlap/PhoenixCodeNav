@@ -1,0 +1,31 @@
+{
+  "id": "01a08721-a04d-7230-a8d6-abc2b88f629d",
+  "external_ref": null,
+  "title": "Clarify SDK authority when Directory.Build.props is above the indexed workspace",
+  "outcome": "The supported SDK-context authority boundary is explicit for repositories indexed from a subdirectory.",
+  "acceptance": [
+    "A focused fixture demonstrates the repo/src workspace layout with repo/Directory.Build.props overriding UsingNETSdkDefaults=false and a central version depending on that flag; distinguish indexed behavior from native MSBuild.",
+    "Document or expose the resulting authority limitation, or design explicitly admitted parent-project authority with matching invalidation; do not silently read outside the selected workspace or change numeric budgets."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "task",
+  "priority": 2,
+  "labels": [
+    "csharp",
+    "fsharp",
+    "indexed-authority",
+    "review",
+    "semantic-correctness"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "open",
+  "parent_id": null,
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": null
+}

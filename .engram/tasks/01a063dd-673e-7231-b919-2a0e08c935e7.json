@@ -1,0 +1,40 @@
+{
+  "id": "01a063dd-673e-7231-b919-2a0e08c935e7",
+  "external_ref": null,
+  "title": "Retry transient indexed snapshot startup in reference-count tests",
+  "outcome": "Retry transient indexed snapshot startup in reference-count tests",
+  "acceptance": [
+    "Retry transient indexed snapshot startup in reference-count tests is done"
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "task",
+  "priority": 1,
+  "labels": [],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "open",
+  "parent_id": null,
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": null,
+  "activity": {
+    "central": {
+      "0b01f1620b4c5d8bfa7390e1639901b2abdafaebe39720c17e50b10c22f6fc66": {
+        "activity_id": "0b01f1620b4c5d8bfa7390e1639901b2abdafaebe39720c17e50b10c22f6fc66",
+        "task_id": "01a063dd-673e-7231-b919-2a0e08c935e7",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "fable",
+          "actor_kind": "agent"
+        },
+        "state": "released",
+        "state_revision": 2,
+        "event_id": "df69e5d9e7b7b7ff344852795213c53230aa5957fbed0024bb8f3a08852e3cac"
+      }
+    }
+  }
+}

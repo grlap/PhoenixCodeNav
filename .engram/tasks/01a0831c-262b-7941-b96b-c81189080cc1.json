@@ -1,0 +1,57 @@
+{
+  "id": "01a0831c-262b-7941-b96b-c81189080cc1",
+  "external_ref": null,
+  "title": "Fail closed for indexed Exists probes outside scanner authority",
+  "outcome": "F# Exists never proves absence for excluded, skipped, linked, non-regular, unavailable, or otherwise unindexed workspace inputs.",
+  "acceptance": [
+    "An existing indexable-kind file under an excluded directory cannot select a successful !Exists branch.",
+    "Missing non-import indexed paths remain unknown unless absence is provable from pinned index evidence."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "bug",
+  "priority": 1,
+  "labels": [
+    "architecture",
+    "csharp",
+    "fsharp",
+    "index-freshness",
+    "msbuild",
+    "review",
+    "semantic",
+    "semantic-correctness"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "completed",
+  "parent_id": "01a082f6-d27c-74c1-861e-b692f43dbf1b",
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": {
+    "summary": "Generic indexed Exists now returns only true or unknown; excluded/skipped/missing inputs fail closed, with decisive indexed regression coverage and same-session dual-review verification.",
+    "completed_at": "2026-09-08T22:41:38.378636100Z",
+    "actor": {
+      "actor_id": "greg/codex",
+      "actor_kind": "agent"
+    }
+  },
+  "activity": {
+    "central": {
+      "010c32d32237850e2c40c6efa8b0139b0b92989acead4aa475a38008627b4247": {
+        "activity_id": "010c32d32237850e2c40c6efa8b0139b0b92989acead4aa475a38008627b4247",
+        "task_id": "01a0831c-262b-7941-b96b-c81189080cc1",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "greg/codex",
+          "actor_kind": "agent"
+        },
+        "state": "finished",
+        "state_revision": 2,
+        "event_id": "a01de75a76b0557c17ef2cf9ed1440507589ec22326a0e60d0724d9718c551a9"
+      }
+    }
+  }
+}

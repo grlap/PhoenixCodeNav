@@ -1,0 +1,47 @@
+{
+  "id": "01a063dd-8a58-74e3-a1df-5e9f1c4572d5",
+  "external_ref": null,
+  "title": "Make review_pack budget gaps actionable",
+  "outcome": "When review_pack is incomplete, an agent can see which bounded subset of paths was omitted and choose a precise recovery action.",
+  "acceptance": [
+    "A separately bounded list names affected paths without allowing the disclosure itself to exceed response budgets.",
+    "Budget-limited responses include total affected paths, returned paths, truncation state, and a stable reason identifier.",
+    "Coverage and retry guidance remain honest when the affected-path list is truncated.",
+    "The capability is represented by its own features[] identifier and BuildInfo.Version is bumped."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "feature",
+  "priority": 3,
+  "labels": [
+    "agent-experience",
+    "mcp-contract",
+    "review"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "open",
+  "parent_id": null,
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": null,
+  "activity": {
+    "central": {
+      "30a2185f014bc6c954593d80e8b81cfae22279246614bd6e989d33e181b15d16": {
+        "activity_id": "30a2185f014bc6c954593d80e8b81cfae22279246614bd6e989d33e181b15d16",
+        "task_id": "01a063dd-8a58-74e3-a1df-5e9f1c4572d5",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "fable",
+          "actor_kind": "agent"
+        },
+        "state": "released",
+        "state_revision": 2,
+        "event_id": "f54ac6be007050f8c181956529448382dc1e049a34e5fea3671d55fd6cba9b0d"
+      }
+    }
+  }
+}

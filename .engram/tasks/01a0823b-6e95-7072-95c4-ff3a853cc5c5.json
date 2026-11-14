@@ -1,0 +1,54 @@
+{
+  "id": "01a0823b-6e95-7072-95c4-ff3a853cc5c5",
+  "external_ref": null,
+  "title": "Support bounded MSBuild MakeRelative in F# semantic project evaluation",
+  "outcome": "F# semantic evaluation resolves RootDir patterns based on MSBuild MakeRelative without enabling arbitrary property functions.",
+  "acceptance": [
+    "A nested F# project inheriting RootDir from Directory.Build.props resolves dependent imports and ProjectReference closure, with decisive semantic navigation assertions.",
+    "Release build, complete tests, external MCP gate, and website verification pass.",
+    "The bounded F# evaluator supports the exact allowlisted MSBuild MakeRelative form with MSBuildProjectDirectory and per-document MSBuildThisFileDirectory semantics.",
+    "Unsupported property functions, malformed arguments, and paths outside the workspace continue to fail closed with stable causes."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "bug",
+  "priority": 1,
+  "labels": [
+    "fsharp",
+    "project-model",
+    "semantic"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "completed",
+  "parent_id": "01a063dd-5401-7f73-a63d-bea317b25710",
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": {
+    "summary": "Delivered bounded, MSBuild-faithful MakeRelative support for F# semantic project evaluation, including project/current-document semantics, exact scalar behavior, fail-closed boundaries, capability/version contract, decisive navigation regressions, full green gates, and clean same-session dual review.",
+    "completed_at": "2026-09-08T19:18:48.491486100Z",
+    "actor": {
+      "actor_id": "greg/codex",
+      "actor_kind": "agent"
+    }
+  },
+  "activity": {
+    "central": {
+      "df47078ab78682da106291c12f08704be6969c04ba50ec8f5d4955111b54748f": {
+        "activity_id": "df47078ab78682da106291c12f08704be6969c04ba50ec8f5d4955111b54748f",
+        "task_id": "01a0823b-6e95-7072-95c4-ff3a853cc5c5",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "greg/codex",
+          "actor_kind": "agent"
+        },
+        "state": "finished",
+        "state_revision": 2,
+        "event_id": "e73cd2523d6eae9ea3b7b6b5b65c922b6bd6cc89da76ab3b871f5e65405577c8"
+      }
+    }
+  }
+}

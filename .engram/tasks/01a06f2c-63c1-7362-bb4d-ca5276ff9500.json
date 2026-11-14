@@ -1,0 +1,28 @@
+{
+  "id": "01a06f2c-63c1-7362-bb4d-ca5276ff9500",
+  "external_ref": null,
+  "title": "Qualify ReferenceQueryStats wall-time summary for nested process-wide attribution",
+  "outcome": "ReferenceQueryStats XML documentation distinguishes operation-local wall durations from nested process-wide CPU and GC-pause attribution.",
+  "acceptance": [
+    "the ReferenceQueryStats summary explicitly qualifies compilationPreparation process-wide CPU and GC-pause fields as attribution rather than operation-local wall time"
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "task",
+  "priority": 3,
+  "labels": [
+    "mcp-contract",
+    "review",
+    "semantic"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "open",
+  "parent_id": "01a063dd-6110-7153-9100-418276aea485",
+  "child_requirement": "optional",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": null
+}

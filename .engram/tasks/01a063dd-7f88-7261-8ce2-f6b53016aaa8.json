@@ -1,0 +1,44 @@
+{
+  "id": "01a063dd-7f88-7261-8ce2-f6b53016aaa8",
+  "external_ref": null,
+  "title": "Use the documented transient family in the Batch47 retry predicate",
+  "outcome": "The Batch47 hierarchy-fallback assertion retries every documented semantic-unavailable transient consistently with SemanticRetry.",
+  "acceptance": [
+    "The Batch47 predicate calls SemanticRetry.IsDocumentedTransient instead of comparing only index_snapshot_unavailable",
+    "The focused Batch47 test and full IndexTests suite pass"
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "task",
+  "priority": 3,
+  "labels": [
+    "review",
+    "testing"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "open",
+  "parent_id": "01a063dd-7b2f-78e2-b2cc-385fd932b308",
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": null,
+  "activity": {
+    "central": {
+      "b86c537af3f25dba27ac52d7a3d9fca0f0878c0475ed2e37503a1a91a4d44d26": {
+        "activity_id": "b86c537af3f25dba27ac52d7a3d9fca0f0878c0475ed2e37503a1a91a4d44d26",
+        "task_id": "01a063dd-7f88-7261-8ce2-f6b53016aaa8",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "fable",
+          "actor_kind": "agent"
+        },
+        "state": "released",
+        "state_revision": 2,
+        "event_id": "7470f8865235802b2c994329f6c2975bd1b72a7483aefb5e9dfb16f4946e8e1a"
+      }
+    }
+  }
+}

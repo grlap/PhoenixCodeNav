@@ -1,0 +1,63 @@
+{
+  "id": "01a0760e-7e72-7140-8cef-ac5e3c04643c",
+  "external_ref": null,
+  "title": "Advertise F# outline in unsupported_language supportedLanguages",
+  "outcome": "The unsupported_language envelope reports fs support for outline consistently with availableForFile, its detail text, and FSharpOutline dispatch.",
+  "acceptance": [
+    "UnsupportedLanguageForTest for operation outline returns supportedLanguages [cs, fs], pinned by FSharpTierATests."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "bug",
+  "priority": 2,
+  "labels": [
+    "fsharp",
+    "mcp-contract",
+    "review"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "completed",
+  "parent_id": "01a07525-eb9d-7582-ba71-88ce823725cd",
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": {
+    "summary": "Delivered in commit f2ca4732f5d7e9bae176219e35f89f37200bbf73: F# outline is included in unsupported_language supportedLanguages and the fsx outline contract pins language identity, [cs, fs], and the unchanged availableForFile boundary.",
+    "completed_at": "2026-09-06T15:02:33.446636600Z",
+    "actor": {
+      "actor_id": "greg/codex",
+      "actor_kind": "agent"
+    }
+  },
+  "activity": {
+    "central": {
+      "24987a87afe6f741584146880d8dbf8d4ae0280db8f3a3323d9045bcabbc8a6a": {
+        "activity_id": "24987a87afe6f741584146880d8dbf8d4ae0280db8f3a3323d9045bcabbc8a6a",
+        "task_id": "01a0760e-7e72-7140-8cef-ac5e3c04643c",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "greg/codex",
+          "actor_kind": "agent"
+        },
+        "state": "finished",
+        "state_revision": 2,
+        "event_id": "259658387a8eabdec31a638db1ef4901d2b97976ab03fb85c96ae5c219a9d2e4"
+      },
+      "5733984cd033b2cacf7638b4a89ddd10cc395b6126b213fc47d69424585a1cbd": {
+        "activity_id": "5733984cd033b2cacf7638b4a89ddd10cc395b6126b213fc47d69424585a1cbd",
+        "task_id": "01a0760e-7e72-7140-8cef-ac5e3c04643c",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "greg/codex",
+          "actor_kind": "agent"
+        },
+        "state": "started",
+        "state_revision": 1,
+        "event_id": "5733984cd033b2cacf7638b4a89ddd10cc395b6126b213fc47d69424585a1cbd"
+      }
+    }
+  }
+}

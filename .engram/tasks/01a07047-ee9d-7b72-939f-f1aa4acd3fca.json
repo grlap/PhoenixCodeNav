@@ -1,0 +1,53 @@
+{
+  "id": "01a07047-ee9d-7b72-939f-f1aa4acd3fca",
+  "external_ref": null,
+  "title": "Stage xunit.runner.json with the Git test project policy change",
+  "outcome": "The reviewed four-thread xUnit policy is reproducible because its runner configuration is tracked in the same commit as the project wiring.",
+  "acceptance": [
+    "tests/CodeNav.GitTests/xunit.runner.json is tracked in the same commit as tests/CodeNav.GitTests/CodeNav.GitTests.csproj"
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "task",
+  "priority": 2,
+  "labels": [
+    "fsharp",
+    "mcp-contract",
+    "review",
+    "semantic",
+    "testing"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "completed",
+  "parent_id": "01a06f9c-dffa-7d91-92bf-2df02b3ce8c1",
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": {
+    "summary": "Tracked the reviewed xunit.runner.json policy in the same exact pathspec commit as CodeNav.GitTests.csproj.",
+    "completed_at": "2026-09-05T06:37:28.816857Z",
+    "actor": {
+      "actor_id": "greg/codex",
+      "actor_kind": "agent"
+    }
+  },
+  "activity": {
+    "central": {
+      "2aea43ee89a8361a84e6136139c2a1c4324b9666044a366c99b9aa6ec62457e2": {
+        "activity_id": "2aea43ee89a8361a84e6136139c2a1c4324b9666044a366c99b9aa6ec62457e2",
+        "task_id": "01a07047-ee9d-7b72-939f-f1aa4acd3fca",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "greg/codex",
+          "actor_kind": "agent"
+        },
+        "state": "finished",
+        "state_revision": 2,
+        "event_id": "6551eb455bc8c3b9e93e0d37ae04b7f39163e8db77ee1e537027818d21f9431b"
+      }
+    }
+  }
+}

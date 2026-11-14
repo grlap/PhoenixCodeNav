@@ -1,0 +1,47 @@
+{
+  "id": "01a063dd-a2dd-74c1-b002-3ee700dfa11d",
+  "external_ref": null,
+  "title": "Resolve same-logical-name project selectors without losing physical evidence",
+  "outcome": "Project graph tools retain 0.12.71 name-node compatibility when multiple physical rows share one logical name while exposing every physical path and reserving project_ambiguous for genuinel...",
+  "acceptance": [
+    "A selector matching multiple physical rows with one logical project name returns the shared graph node instead of project_ambiguous.",
+    "Selectors spanning different logical names still return project_ambiguous, with decisive product tests for both cases.",
+    "The response lists every matching physical project path and its distinguishing metadata."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "bug",
+  "priority": 2,
+  "labels": [
+    "agent-experience",
+    "mcp-contract",
+    "navigation",
+    "review"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "superseded",
+  "parent_id": "01a063dd-84ee-78b2-be90-a2b82477e5de",
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": "01a06999-0624-7d21-89c3-c9f11c0f3912",
+  "disposal_reason": "Superseded by the owner's Option C decision (Greg, 2026-09-04): same-name physical project rows remain separate index rows and are disclosed (project_ambiguous with every physical path; graph/semantic answers are assembly-name-keyed and identical for the listed paths, stated in the response detail). This item's acceptance ('return the shared graph node instead of project_ambiguous') is the opposite of that decision. Shipped in b54a831 (0.12.72) and documented in 21cdaa8 (0.12.74). Reviewer ruling by Phoenix::Fable during the close-out audit; re-open if the owner wants the other behavior.",
+  "completion": null,
+  "activity": {
+    "central": {
+      "5e29f58e38979b6f378246aab7ba66b4df55bbaa79644f0053daf54334f99e64": {
+        "activity_id": "5e29f58e38979b6f378246aab7ba66b4df55bbaa79644f0053daf54334f99e64",
+        "task_id": "01a063dd-a2dd-74c1-b002-3ee700dfa11d",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "fable",
+          "actor_kind": "agent"
+        },
+        "state": "released",
+        "state_revision": 2,
+        "event_id": "1842fd5d3c0793ea54779fba63ac7af056fa65c0e1c68a8e0bd94dacac0742e4"
+      }
+    }
+  }
+}

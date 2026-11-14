@@ -1,0 +1,30 @@
+{
+  "id": "01a08faf-e142-7052-b05d-6f199ab25c27",
+  "external_ref": null,
+  "title": "Emit a diagnostic for swallowed daemon recovery cleanup failures",
+  "outcome": "Unexpected recovery cleanup failures are observable without changing typed results, caller cancellation, shutdown status, or disclosing exception messages and paths.",
+  "acceptance": [
+    "Tests inject unexpected client disposal, stream disposal and in-flight-attempt faults and assert an exception-type-only diagnostic while preserving the original unavailable/uncertain result, cancellation and shutdown status. Diagnostic sink failures must not replace those primary outcomes."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "task",
+  "priority": 3,
+  "labels": [
+    "daemon",
+    "mcp-contract",
+    "performance",
+    "review",
+    "security"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "superseded",
+  "parent_id": "01a08f80-1589-7da1-bf95-4a910f482d1c",
+  "child_requirement": "optional",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": "01a08fb0-9f42-7123-b7a0-e52ccdcba14b",
+  "disposal_reason": "Continue as independent P3 follow-up after completed shutdown fix w-4a910f482d1c. The review finding is non-blocking and its original review/parent evidence remains in the notes; no implementation has been attempted.",
+  "completion": null
+}

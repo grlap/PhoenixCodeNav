@@ -1,0 +1,54 @@
+{
+  "id": "01a086d9-6255-7661-96de-2d3e9379932c",
+  "external_ref": null,
+  "title": "Retain capabilities growth margin when adding shared SDK context",
+  "outcome": "Retain capabilities growth margin when adding shared SDK context",
+  "acceptance": [
+    "CapabilitiesDynamicTextUsesExactUtf8BoundaryAndReportsTruncation passes with shared-semantic-sdk-context present and the existing byte limits and >= 2 KiB growth-margin assertion unchanged."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "bug",
+  "priority": 1,
+  "labels": [
+    "csharp",
+    "fsharp",
+    "mcp-contract",
+    "semantic-correctness",
+    "shared-evaluation",
+    "testing"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "completed",
+  "parent_id": "01a086ca-de85-7841-a7b1-82e500b03f41",
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": {
+    "summary": "Preserved all git-awareness claims while compacting its summary; unchanged feature ids, numeric budgets and >=2 KiB growth-margin assertion pass. Both original reviewers checked meaning preservation; full corrected gate 1717/0/2, MCP47/0, website167/167 and format/Release clean. No manifest redesign or limits changed.",
+    "completed_at": "2026-09-09T17:02:38.520395100Z",
+    "actor": {
+      "actor_id": "greg/codex",
+      "actor_kind": "agent"
+    }
+  },
+  "activity": {
+    "central": {
+      "b559fb31d25567bd1c396b04ba1a0d140241b70cc6dbc0be8a62287ff43c2498": {
+        "activity_id": "b559fb31d25567bd1c396b04ba1a0d140241b70cc6dbc0be8a62287ff43c2498",
+        "task_id": "01a086d9-6255-7661-96de-2d3e9379932c",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "greg/codex",
+          "actor_kind": "agent"
+        },
+        "state": "finished",
+        "state_revision": 2,
+        "event_id": "5ab10c2f49b61675b6bd29a61304d602902eb5083b87b03d2800ee033bf7023f"
+      }
+    }
+  }
+}

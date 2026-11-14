@@ -1,0 +1,55 @@
+{
+  "id": "01a07223-62aa-74f2-aa4c-571053594cdf",
+  "external_ref": null,
+  "title": "Force an index rebuild for cumulative F# NETSTANDARD define output",
+  "outcome": "Force an index rebuild for cumulative F# NETSTANDARD define output",
+  "acceptance": [
+    "An indexed search_symbol regression over netstandard2.0 proves NETSTANDARD2_0_OR_GREATER selects the active declaration branch.",
+    "IndexBuilder.SchemaVersion is 31 and the immediate-predecessor rebuild contract pins schema 30."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "bug",
+  "priority": 1,
+  "labels": [
+    "architecture",
+    "fsharp",
+    "index-freshness",
+    "mcp-contract",
+    "review",
+    "semantic"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "completed",
+  "parent_id": "01a070c5-95e1-7482-8cd1-326c967e5cb4",
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": {
+    "summary": "Schema v31 now forces rebuilding F# indexed declarations under the cumulative NETSTANDARD define interpretation, with indexed search coverage and immediate-predecessor schema-30 startup coverage.",
+    "completed_at": "2026-09-05T15:17:37.372409400Z",
+    "actor": {
+      "actor_id": "greg/codex",
+      "actor_kind": "agent"
+    }
+  },
+  "activity": {
+    "central": {
+      "9634891e8227aeb8a5223021343310f5c9991183adc68ae7c90a6b97bf4951e8": {
+        "activity_id": "9634891e8227aeb8a5223021343310f5c9991183adc68ae7c90a6b97bf4951e8",
+        "task_id": "01a07223-62aa-74f2-aa4c-571053594cdf",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "greg/codex",
+          "actor_kind": "agent"
+        },
+        "state": "finished",
+        "state_revision": 2,
+        "event_id": "bff6977d2d5598eae43a2e8e7dadffad198dbeccf26042e6359a8ad51e671d7a"
+      }
+    }
+  }
+}

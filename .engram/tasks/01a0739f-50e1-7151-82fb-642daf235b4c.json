@@ -1,0 +1,27 @@
+{
+  "id": "01a0739f-50e1-7151-82fb-642daf235b4c",
+  "external_ref": null,
+  "title": "Preserve F# references context and diagnostic sampling semantics",
+  "outcome": "F# references keeps its established context/diagnostic sampling and truncation contract without introducing an unapproved new limit.",
+  "acceptance": [
+    "A response with many contexts and diagnostics has behavior explicitly reconciled with the no-new-limits directive and reports every omission honestly."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "bug",
+  "priority": 2,
+  "labels": [
+    "mcp-contract",
+    "review"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "open",
+  "parent_id": null,
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": null
+}

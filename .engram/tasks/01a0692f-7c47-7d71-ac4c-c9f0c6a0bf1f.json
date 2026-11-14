@@ -1,0 +1,47 @@
+{
+  "id": "01a0692f-7c47-7d71-ac4c-c9f0c6a0bf1f",
+  "external_ref": null,
+  "title": "ReservedCliNamesCannotShadowLiveMcpParameters must tolerate parameterless tool schemas",
+  "outcome": "ReservedCliNamesCannotShadowLiveMcpParameters must tolerate parameterless tool schemas",
+  "acceptance": [
+    "The test uses TryGetProperty for 'properties' and treats a missing object as empty, so a future parameterless tool passes instead of throwing KeyNotFoundException"
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "chore",
+  "priority": 3,
+  "labels": [],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "completed",
+  "parent_id": null,
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": {
+    "summary": "Made the reserved CLI-name contract test tolerate parameterless tool schemas.",
+    "completed_at": "2026-09-03T23:58:03.057535200Z",
+    "actor": {
+      "actor_id": "termal",
+      "actor_kind": "agent"
+    }
+  },
+  "activity": {
+    "central": {
+      "07af554bc98721385d7f667522f59fb99119e50216b41a405f2737f41c9a1e80": {
+        "activity_id": "07af554bc98721385d7f667522f59fb99119e50216b41a405f2737f41c9a1e80",
+        "task_id": "01a0692f-7c47-7d71-ac4c-c9f0c6a0bf1f",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "termal",
+          "actor_kind": "agent"
+        },
+        "state": "finished",
+        "state_revision": 2,
+        "event_id": "82fefccfa12ac0ce0b3b61eca1b01fc22dcb5d822091ba6d8276727ac363e871"
+      }
+    }
+  }
+}

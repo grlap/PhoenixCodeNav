@@ -1,0 +1,24 @@
+{
+  "id": "01a06e71-a544-7f73-91ec-2742ad1899ea",
+  "external_ref": null,
+  "title": "Harden the resolved /review-code prompt against PowerShell command serialization (second INCONCLUSIVE Codex reviewer)",
+  "outcome": "Codex reviewer children stop returning INCONCLUSIVE before inspecting files. Evidence: delegation df9ff8e9 (child session-6226, 2026-09-04) serialized the inventory as \"git\" \"--no-optional-locks\" \"status\" \"--short\" (args.map quoting each token, joined by spaces); PowerShell error: Unexpected token --no-optional-locks in expression or statement; Git never started. Same failure class as the cycle-3 Codex reviewer on the CLI changeset. Platform-level fix (argv-style execution so agents never serialize commands into shell strings) belongs to TermAl; owner decides whether to raise it there.",
+  "acceptance": [
+    "The resolved /review-code prompt states a PowerShell rule: run the worktree inventory exactly as written (git --no-optional-locks status --short); never emit an executable plus each argument as individually quoted tokens; a quoted executable must be invoked with the call operator (&). A Codex /review-code child on Windows completes its inventory on the first attempt. Changed through the ordinary review gate as its own changeset; no product change."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "chore",
+  "priority": 2,
+  "labels": [],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "open",
+  "parent_id": null,
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": null
+}

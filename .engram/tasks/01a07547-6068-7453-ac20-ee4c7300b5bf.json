@@ -1,0 +1,43 @@
+{
+  "id": "01a07547-6068-7453-ac20-ee4c7300b5bf",
+  "external_ref": null,
+  "title": "Remove unused website section styles after the simplified layout settles",
+  "outcome": "Remove unused website section styles after the simplified layout settles",
+  "acceptance": [
+    "Remove confirmed unused selector families from website/styles.css while retaining shared rules and the live confidence strip.",
+    "Verify responsive appearance and the existing website contract gate without expanding the current review packet."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "chore",
+  "priority": 3,
+  "labels": [
+    "website"
+  ],
+  "assigned_to": "Website",
+  "deferred_until": null,
+  "lifecycle": "open",
+  "parent_id": null,
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": null,
+  "activity": {
+    "central": {
+      "c1adef7a9e1d000a6f20ff32fc45dd7d1a86db17b9e8fd1e51eb0f7f953b4cf8": {
+        "activity_id": "c1adef7a9e1d000a6f20ff32fc45dd7d1a86db17b9e8fd1e51eb0f7f953b4cf8",
+        "task_id": "01a07547-6068-7453-ac20-ee4c7300b5bf",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "greg/codex",
+          "actor_kind": "agent"
+        },
+        "state": "released",
+        "state_revision": 2,
+        "event_id": "17a749f710663ed16be598d43ed1dce6122dd46504feb74e0aa47f6b648b8a61"
+      }
+    }
+  }
+}

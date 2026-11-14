@@ -1,0 +1,33 @@
+{
+  "id": "01a08844-885c-7991-9ef6-bd39830075be",
+  "external_ref": null,
+  "title": "Identify assumed-empty property names in public semantic evidence",
+  "outcome": "Identify assumed-empty property names in public semantic evidence",
+  "acceptance": [
+    "Evidence is propagated through relevant symbol/reference/count results and closure aggregation; names only, no environment values, unchanged numeric response limits.",
+    "Public semantic evidence identifies the property names consumed by the optional assumed-empty guard policy without turning the stable partial-reason ID into dynamically generated IDs."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "task",
+  "priority": 3,
+  "labels": [
+    "agent-experience",
+    "architecture",
+    "csharp",
+    "fsharp",
+    "mcp-contract",
+    "msbuild",
+    "semantic-correctness"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "open",
+  "parent_id": "01a0882a-126b-7f81-8a4b-3f1504bf2d37",
+  "child_requirement": "optional",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": null
+}

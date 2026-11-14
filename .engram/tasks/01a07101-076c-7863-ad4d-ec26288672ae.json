@@ -1,0 +1,50 @@
+{
+  "id": "01a07101-076c-7863-ad4d-ec26288672ae",
+  "external_ref": null,
+  "title": "Expose captured transitive F# projects to consuming compiler contexts",
+  "outcome": "Expose captured transitive F# projects to consuming compiler contexts",
+  "acceptance": [
+    "An App -> Mid -> Leaf F# closure resolves a Leaf-defined public-signature member from App without a missing-assembly diagnostic."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "bug",
+  "priority": 1,
+  "labels": [
+    "review",
+    "semantic-correctness"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "completed",
+  "parent_id": "01a063dd-599c-7253-999b-3eff45080442",
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": {
+    "summary": "Built the policy-appropriate flat project-reference set into both command-line -r arguments and FCS ReferencedProjects for every node.",
+    "completed_at": "2026-09-05T10:39:23.671155800Z",
+    "actor": {
+      "actor_id": "greg/codex",
+      "actor_kind": "agent"
+    }
+  },
+  "activity": {
+    "central": {
+      "43dcff75fb571b2984863d437ad77a6a61cbd0e4270bcdbdca1387471683840f": {
+        "activity_id": "43dcff75fb571b2984863d437ad77a6a61cbd0e4270bcdbdca1387471683840f",
+        "task_id": "01a07101-076c-7863-ad4d-ec26288672ae",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "greg/codex",
+          "actor_kind": "agent"
+        },
+        "state": "finished",
+        "state_revision": 2,
+        "event_id": "b03002fdfb1589a9c086975c1ad0da95167e56608372f3afe0ce459baccfc85c"
+      }
+    }
+  }
+}

@@ -1,0 +1,28 @@
+{
+  "id": "01a0739f-542a-76c3-809d-65c000a2b050",
+  "external_ref": null,
+  "title": "Prevent long F# dependent scans from monopolizing the semantic gate",
+  "outcome": "Concurrent F# semantic requests are not serialized behind the entire workspace-dependent references sweep.",
+  "acceptance": [
+    "A deterministic concurrency test proves symbol_at can complete while a dependent references sweep is paused or otherwise bounds the gate hold independently."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "task",
+  "priority": 2,
+  "labels": [
+    "concurrency",
+    "performance",
+    "review"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "open",
+  "parent_id": null,
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": null
+}

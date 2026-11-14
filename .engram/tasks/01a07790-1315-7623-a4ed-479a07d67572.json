@@ -1,0 +1,50 @@
+{
+  "id": "01a07790-1315-7623-a4ed-479a07d67572",
+  "external_ref": null,
+  "title": "Normalize line endings in the new SemanticService F# partial files",
+  "outcome": "Normalize line endings in the new SemanticService F# partial files",
+  "acceptance": [
+    "The five new SemanticService.FSharp partial working-copy files use one consistent checkout line ending and dotnet format --verify-no-changes remains green"
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "task",
+  "priority": 3,
+  "labels": [
+    "architecture",
+    "review"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "completed",
+  "parent_id": null,
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": {
+    "summary": "After cffbc9c, the five new partial working-copy files are uniformly CRLF, normalized Git blobs remain identical to HEAD, format verification passes, and the worktree is clean.",
+    "completed_at": "2026-09-06T16:38:22.516943900Z",
+    "actor": {
+      "actor_id": "greg/codex",
+      "actor_kind": "agent"
+    }
+  },
+  "activity": {
+    "central": {
+      "ee7ac6e37729a67ab28ca26db54cae4a52514775f8c87d3a970fafefade656e1": {
+        "activity_id": "ee7ac6e37729a67ab28ca26db54cae4a52514775f8c87d3a970fafefade656e1",
+        "task_id": "01a07790-1315-7623-a4ed-479a07d67572",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "greg/codex",
+          "actor_kind": "agent"
+        },
+        "state": "finished",
+        "state_revision": 2,
+        "event_id": "f56d5aa4b2d71fb3ccfab63e4d120f29b5417e9a9335109ddc4df7c3ad21bc60"
+      }
+    }
+  }
+}

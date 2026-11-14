@@ -1,0 +1,54 @@
+{
+  "id": "01a08c62-5b97-7c53-b370-14c7a089b031",
+  "external_ref": null,
+  "title": "Require an explicit ProjectModelMode on the public WorktreeIndexer.Ensure overload",
+  "outcome": "Require an explicit ProjectModelMode on the public WorktreeIndexer.Ensure overload",
+  "acceptance": [
+    "Standalone public worktree publication takes an explicit ProjectModelMode and uses it through sibling reconciliation; production manager propagation and pinned readiness behavior remain intact."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "task",
+  "priority": 3,
+  "labels": [
+    "architecture",
+    "default",
+    "fsharp",
+    "project-model",
+    "review",
+    "semantic"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "completed",
+  "parent_id": null,
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": {
+    "summary": "Public Ensure now requires the explicit model; production captured selection preserved. Three real sibling publication controls pass, including Simple discarding evaluated facts and pinned parent facts staying intact. CLR signature compatibility break acknowledged; separate policy follow-up filed.",
+    "completed_at": "2026-09-10T20:49:38.610649800Z",
+    "actor": {
+      "actor_id": "greg/codex",
+      "actor_kind": "agent"
+    }
+  },
+  "activity": {
+    "central": {
+      "47a2c5d4b51d97e63b7063fadee6de39d50e110e3551390efa25cbe4ae8c5095": {
+        "activity_id": "47a2c5d4b51d97e63b7063fadee6de39d50e110e3551390efa25cbe4ae8c5095",
+        "task_id": "01a08c62-5b97-7c53-b370-14c7a089b031",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "greg/codex",
+          "actor_kind": "agent"
+        },
+        "state": "finished",
+        "state_revision": 2,
+        "event_id": "766edda139fe1623659eb50c1854710024a74afc9b5f09e994ed44df8ed68876"
+      }
+    }
+  }
+}

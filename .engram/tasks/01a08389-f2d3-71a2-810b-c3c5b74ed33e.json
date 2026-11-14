@@ -1,0 +1,56 @@
+{
+  "id": "01a08389-f2d3-71a2-810b-c3c5b74ed33e",
+  "external_ref": null,
+  "title": "Preserve C# CPM substitution accounting after unresolved assignments",
+  "outcome": "Shared scalar expansion stops C# central-package evaluation at the first unresolved property without charging later substitutions.",
+  "acceptance": [
+    "A regression with unresolved prefixes and 4096 later substitutions still resolves the subsequent valid central package version.",
+    "The existing 4096 substitution limit and all other C# limits remain numerically unchanged."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "bug",
+  "priority": 1,
+  "labels": [
+    "architecture",
+    "csharp",
+    "fsharp",
+    "msbuild",
+    "review",
+    "semantic",
+    "semantic-correctness"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "completed",
+  "parent_id": "01a08298-8fc2-7781-90fb-e9d128515475",
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": {
+    "summary": "C# stopOnUnresolvedProperty preserves original substitution charges. Decisive rejected-suffix fixture retains Version1.2.3/CentrallyManaged=true; both original reviewers verified fixed. Committed 9cd8aa9. Final same-session dual review CLEAN; full solution1587/0, Release0warnings/errors, MCP47/0, website167/167. No numeric limit changes.",
+    "completed_at": "2026-09-09T01:39:05.864481500Z",
+    "actor": {
+      "actor_id": "greg/codex",
+      "actor_kind": "agent"
+    }
+  },
+  "activity": {
+    "central": {
+      "1679e08df45bf39534544d6c0e258db924bc297c732dd63ad9a64f86acbfae08": {
+        "activity_id": "1679e08df45bf39534544d6c0e258db924bc297c732dd63ad9a64f86acbfae08",
+        "task_id": "01a08389-f2d3-71a2-810b-c3c5b74ed33e",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "greg/codex",
+          "actor_kind": "agent"
+        },
+        "state": "finished",
+        "state_revision": 2,
+        "event_id": "5fdefa25c66208111b5f54ed9db82aaebba98e00fbc83c0f8b38ab5e71a91c52"
+      }
+    }
+  }
+}

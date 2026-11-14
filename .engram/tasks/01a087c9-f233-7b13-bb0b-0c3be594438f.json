@@ -1,0 +1,53 @@
+{
+  "id": "01a087c9-f233-7b13-bb0b-0c3be594438f",
+  "external_ref": null,
+  "title": "Retain capabilities growth margin for invariant-condition proof",
+  "outcome": "Retain capabilities growth margin for invariant-condition proof",
+  "acceptance": [
+    "CapabilitiesDynamicTextUsesExactUtf8BoundaryAndReportsTruncation passes with the unchanged >=2048-byte growth requirement, all feature IDs and prior guarantees retained."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "bug",
+  "priority": 1,
+  "labels": [
+    "csharp",
+    "fsharp",
+    "mcp-contract",
+    "msbuild",
+    "semantic-correctness"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "completed",
+  "parent_id": "01a087c1-16bb-71d0-b87d-168e1dc3ce1e",
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": {
+    "summary": "Restored unchanged >=2048-byte capability growth margin while retaining feature IDs and review-pack guarantees, with decisive clause assertions. Final gate-review-fix.log: all 1818 tests pass; both original reviewers CLEAN.",
+    "completed_at": "2026-09-09T21:16:19.914927200Z",
+    "actor": {
+      "actor_id": "greg/codex",
+      "actor_kind": "agent"
+    }
+  },
+  "activity": {
+    "central": {
+      "1bbae1aa59459ef4f9246cea868e03c56ce036b821b44072a062001a8ed58db6": {
+        "activity_id": "1bbae1aa59459ef4f9246cea868e03c56ce036b821b44072a062001a8ed58db6",
+        "task_id": "01a087c9-f233-7b13-bb0b-0c3be594438f",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "greg/codex",
+          "actor_kind": "agent"
+        },
+        "state": "finished",
+        "state_revision": 2,
+        "event_id": "c5b36a9d78ee5b592283240c86d17559694bb1db9b1c6d17772e1c4b104d8152"
+      }
+    }
+  }
+}

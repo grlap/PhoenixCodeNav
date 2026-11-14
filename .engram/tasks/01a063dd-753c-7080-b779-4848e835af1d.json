@@ -1,0 +1,40 @@
+{
+  "id": "01a063dd-753c-7080-b779-4848e835af1d",
+  "external_ref": null,
+  "title": "Restore same-run reuse and full-rebuild parity coverage to the fresh external gate",
+  "outcome": "Restore same-run reuse and full-rebuild parity coverage to the fresh external gate",
+  "acceptance": [
+    "Restore same-run reuse and full-rebuild parity coverage to the fresh external gate is done"
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "task",
+  "priority": 1,
+  "labels": [],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "open",
+  "parent_id": null,
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": null,
+  "activity": {
+    "central": {
+      "f004704495c226a3081bd30cea982c855eaaf466d3b620b210b50fab694ad922": {
+        "activity_id": "f004704495c226a3081bd30cea982c855eaaf466d3b620b210b50fab694ad922",
+        "task_id": "01a063dd-753c-7080-b779-4848e835af1d",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "fable",
+          "actor_kind": "agent"
+        },
+        "state": "released",
+        "state_revision": 2,
+        "event_id": "b658ac919bacbd9588651cabb6857cc08959af3a305f0d5835b0fa9f45fcf494"
+      }
+    }
+  }
+}

@@ -1,0 +1,51 @@
+{
+  "id": "01a069ef-1029-7f01-a0a3-4dfa6a74c7d2",
+  "external_ref": null,
+  "title": "Align name-keyed collision disclosure claims with actual response coverage",
+  "outcome": "Align name-keyed collision disclosure claims with actual response coverage",
+  "acceptance": [
+    "Design and MCP descriptions state that nameKeyedOwnerCollisionGroups is emitted only for documentationCommentId resolution unless product coverage is expanded.",
+    "The same Codex reviewer verifies the blocking overclaim is removed."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "bug",
+  "priority": 1,
+  "labels": [
+    "mcp-contract",
+    "review"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "completed",
+  "parent_id": "01a06999-0624-7d21-89c3-c9f11c0f3912",
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": {
+    "summary": "Aligned collision-disclosure claims with actual documentationCommentId-only response coverage and received same-session reviewer verification.",
+    "completed_at": "2026-09-04T01:19:03.381945Z",
+    "actor": {
+      "actor_id": "termal",
+      "actor_kind": "agent"
+    }
+  },
+  "activity": {
+    "central": {
+      "f9936fe005c757582aed013526b69dda1517908d6fd762a01b88c313a993e0ba": {
+        "activity_id": "f9936fe005c757582aed013526b69dda1517908d6fd762a01b88c313a993e0ba",
+        "task_id": "01a069ef-1029-7f01-a0a3-4dfa6a74c7d2",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "termal",
+          "actor_kind": "agent"
+        },
+        "state": "finished",
+        "state_revision": 2,
+        "event_id": "4c803ddb3886587182d63910f5188852cc52a8387f97510bbff0ab40eb46821a"
+      }
+    }
+  }
+}

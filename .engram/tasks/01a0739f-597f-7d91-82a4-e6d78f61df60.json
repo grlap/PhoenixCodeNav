@@ -1,0 +1,27 @@
+{
+  "id": "01a0739f-597f-7d91-82a4-e6d78f61df60",
+  "external_ref": null,
+  "title": "Classify missing declaring projects in F# dependent closures honestly",
+  "outcome": "A dependent TFM whose captured closure cannot expose the declaring project is not conflated with an intentionally inactive ProjectReference.",
+  "acceptance": [
+    "A regression produces a distinct incomplete-coverage reason for a declaring-project lookup miss and never reports workspaceComplete:true for that miss."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "bug",
+  "priority": 3,
+  "labels": [
+    "review",
+    "semantic-correctness"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "open",
+  "parent_id": null,
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": null
+}

@@ -1,0 +1,65 @@
+{
+  "id": "01a063dd-de68-74b3-9a6c-eef85fbe4008",
+  "external_ref": null,
+  "title": "Gate operator documentation-ID classification on the method prefix",
+  "outcome": "Types whose names begin with op_ remain valid implementation targets while actual method operator and constructor IDs are still rejected.",
+  "acceptance": [
+    "A product test proves implementations accepts T:Ns.op_Registry as a type.",
+    "Only M: documentation IDs use op_, #ctor, and #cctor unsupported-method classification."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "bug",
+  "priority": 3,
+  "labels": [
+    "agent-experience",
+    "mcp-contract",
+    "review",
+    "semantic"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "completed",
+  "parent_id": "01a063dd-887c-7630-9f20-3e13e01e490b",
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": {
+    "summary": "Delivered method-prefix-gated unsupported documentation ID classification.",
+    "completed_at": "2026-09-04T15:48:48.761300400Z",
+    "actor": {
+      "actor_id": "greg/codex",
+      "actor_kind": "agent"
+    }
+  },
+  "activity": {
+    "central": {
+      "3a1d9826eab71264da487d4f728c9c9c29a250e3c71c1165061c9b4cf7ff2aac": {
+        "activity_id": "3a1d9826eab71264da487d4f728c9c9c29a250e3c71c1165061c9b4cf7ff2aac",
+        "task_id": "01a063dd-de68-74b3-9a6c-eef85fbe4008",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "greg/codex",
+          "actor_kind": "agent"
+        },
+        "state": "finished",
+        "state_revision": 2,
+        "event_id": "1ede12b3022942eb3d3f936ac3f39c0a639dda52c1e199a24e8c820bb84c85a4"
+      },
+      "ebe57077da41c7ee5ca374edbd0f26f346667158081a69c53be89cdf46dae608": {
+        "activity_id": "ebe57077da41c7ee5ca374edbd0f26f346667158081a69c53be89cdf46dae608",
+        "task_id": "01a063dd-de68-74b3-9a6c-eef85fbe4008",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "fable",
+          "actor_kind": "agent"
+        },
+        "state": "released",
+        "state_revision": 2,
+        "event_id": "e26fa84118cec93112a1ed13448a69ac59e753aff61540dac5f9357f1fbc5967"
+      }
+    }
+  }
+}

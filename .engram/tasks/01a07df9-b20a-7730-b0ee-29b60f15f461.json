@@ -1,0 +1,44 @@
+{
+  "id": "01a07df9-b20a-7730-b0ee-29b60f15f461",
+  "external_ref": null,
+  "title": "Delete the framework-default daemon workspace when its lease assertion fails",
+  "outcome": "Delete the framework-default daemon workspace when its lease assertion fails",
+  "acceptance": [
+    "A failing lease-release assertion in the framework-default daemon test still executes tolerant workspace cleanup while preserving the assertion failure."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "bug",
+  "priority": 2,
+  "labels": [
+    "infrastructure",
+    "review",
+    "testing"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "superseded",
+  "parent_id": "01a078ae-bdca-7b30-a846-3887ea1da0de",
+  "child_requirement": "optional",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": "01a07df9-b264-7d13-9082-953f55eac3e5",
+  "disposal_reason": "Consolidated with the other B3d teardown-shape and TestSupport placement findings per Fable #718.",
+  "completion": null,
+  "activity": {
+    "central": {
+      "745fbf189ecc80f1d1455bf7eafbf6126400f599221838921de970a39a882105": {
+        "activity_id": "745fbf189ecc80f1d1455bf7eafbf6126400f599221838921de970a39a882105",
+        "task_id": "01a07df9-b20a-7730-b0ee-29b60f15f461",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "greg/codex",
+          "actor_kind": "agent"
+        },
+        "state": "abandoned",
+        "state_revision": 2,
+        "event_id": "a7ccc38f6f79c81f071b63da89a723c3f7c227e420a5c939b368eafd513f8669"
+      }
+    }
+  }
+}

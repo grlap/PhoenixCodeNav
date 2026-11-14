@@ -1,0 +1,46 @@
+{
+  "id": "01a063dd-cf59-7a73-93f5-b671aece29c2",
+  "external_ref": null,
+  "title": "Document daemon authority for default query scope",
+  "outcome": "Operators understand that the shared daemon process environment chooses CODENAV_DEFAULT_QUERY_SCOPE for every connected relay client.",
+  "acceptance": [
+    "README and agent instructions state that the daemon environment owns the configured default for all clients and that queryScope=all is the per-call escape hatch."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "task",
+  "priority": 3,
+  "labels": [
+    "agent-experience",
+    "documentation",
+    "mcp-contract",
+    "review",
+    "search"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "open",
+  "parent_id": "01a063dd-8f5b-7d81-8967-c9c6bcc81b0d",
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": null,
+  "activity": {
+    "central": {
+      "e6eef450a436e03bffc9c1e70e31ae738405007d2da14593580e429eb4d861d1": {
+        "activity_id": "e6eef450a436e03bffc9c1e70e31ae738405007d2da14593580e429eb4d861d1",
+        "task_id": "01a063dd-cf59-7a73-93f5-b671aece29c2",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "fable",
+          "actor_kind": "agent"
+        },
+        "state": "released",
+        "state_revision": 2,
+        "event_id": "230c39efd7c7673c4bb47a80798abf7520ced90d895226067ef6c9c170d54de7"
+      }
+    }
+  }
+}

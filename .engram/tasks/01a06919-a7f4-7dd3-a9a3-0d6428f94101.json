@@ -1,0 +1,56 @@
+{
+  "id": "01a06919-a7f4-7dd3-a9a3-0d6428f94101",
+  "external_ref": null,
+  "title": "Make test-side Git fixture setup deterministic under full-suite load",
+  "outcome": "Git fixture initialization completes deterministically when the complete solution runs with concurrent test projects.",
+  "acceptance": [
+    "Batch42TestsPart3.DefaultSdkMembershipHonorsExclusionsAndOrderedExplicitIncludes passes in the same uninterrupted complete solution run.",
+    "Batch43GitReviewSafetyTestsPart2.DirtyFilesExpandsOrdinaryDirectoriesButExcludesEmbeddedRepositoriesAtomically passes in the uninterrupted complete solution run.",
+    "No isolated rerun or flake waiver is used to satisfy the gate."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "bug",
+  "priority": 1,
+  "labels": [
+    "agent-experience",
+    "cli",
+    "git",
+    "mcp-contract",
+    "review",
+    "testing"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "completed",
+  "parent_id": "01a06819-d56e-7e42-99e2-d6c75600a4c8",
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": {
+    "summary": "Replaced load-sensitive test-side Git setup timeouts and invalid retries with the established process-exit ceiling.",
+    "completed_at": "2026-09-03T21:15:59.012415600Z",
+    "actor": {
+      "actor_id": "termal",
+      "actor_kind": "agent"
+    }
+  },
+  "activity": {
+    "central": {
+      "15cedecb4c5c9ae7053a81232b77f736a6bc0af3c749c6a4d93a1e9a2ea1afc2": {
+        "activity_id": "15cedecb4c5c9ae7053a81232b77f736a6bc0af3c749c6a4d93a1e9a2ea1afc2",
+        "task_id": "01a06919-a7f4-7dd3-a9a3-0d6428f94101",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "termal",
+          "actor_kind": "agent"
+        },
+        "state": "finished",
+        "state_revision": 2,
+        "event_id": "45de2a0e76982d2aa7902e2687651d9f09423c3676c9166113acecd4ae4b5d9f"
+      }
+    }
+  }
+}

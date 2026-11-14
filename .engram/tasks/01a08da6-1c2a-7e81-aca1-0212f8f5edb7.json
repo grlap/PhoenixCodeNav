@@ -1,0 +1,50 @@
+{
+  "id": "01a08da6-1c2a-7e81-aca1-0212f8f5edb7",
+  "external_ref": null,
+  "title": "Publish reviewed internal engine distribution and README anchor follow-ups",
+  "outcome": "The reviewed four-path P3 batch is committed and normally pushed to origin/main under Greg's explicit per-changeset authority.",
+  "acceptance": [
+    "Commit contains only the reviewed four paths; normal push succeeds; origin/main is verified at the local commit and the worktree is clean."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "chore",
+  "priority": 3,
+  "labels": [
+    "publication",
+    "review"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "completed",
+  "parent_id": null,
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": {
+    "summary": "Committed reviewed P3 four-path batch as 9c85b35 and normally pushed to origin/main. Remote commit equals local HEAD, ahead/behind0/0, clean worktree; current explicit authorization consumed.",
+    "completed_at": "2026-09-10T23:29:02.365626500Z",
+    "actor": {
+      "actor_id": "greg/codex",
+      "actor_kind": "agent"
+    }
+  },
+  "activity": {
+    "central": {
+      "0ff80785c28a1efa5ce74d3b1adb0a20ddc43c00baeafee4968b4a06a8bae3dd": {
+        "activity_id": "0ff80785c28a1efa5ce74d3b1adb0a20ddc43c00baeafee4968b4a06a8bae3dd",
+        "task_id": "01a08da6-1c2a-7e81-aca1-0212f8f5edb7",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "greg/codex",
+          "actor_kind": "agent"
+        },
+        "state": "finished",
+        "state_revision": 2,
+        "event_id": "46da1c945ee238058f7fa93b58a65efc5d71f40a7c25c729ba674a748fedc834"
+      }
+    }
+  }
+}

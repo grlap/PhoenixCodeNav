@@ -1,0 +1,47 @@
+{
+  "id": "01a0692f-7c26-78f3-af2e-58285c7013bb",
+  "external_ref": null,
+  "title": "Cover --args-file symlink refusal: Unix real-symlink integration test plus platform-neutral ReparsePoint predicate test",
+  "outcome": "Cover --args-file symlink refusal: Unix real-symlink integration test plus platform-neutral ReparsePoint predicate test",
+  "acceptance": [
+    "A Unix test passes a symlinked request file and receives argument_source_not_regular exit 2; a platform-neutral unit test proves the FileAttributes.ReparsePoint predicate; no production change"
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "task",
+  "priority": 3,
+  "labels": [],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "completed",
+  "parent_id": null,
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": {
+    "summary": "Added CLI args-file symlink refusal coverage and a platform-neutral Windows ReparsePoint predicate test.",
+    "completed_at": "2026-09-03T23:58:02.995640200Z",
+    "actor": {
+      "actor_id": "termal",
+      "actor_kind": "agent"
+    }
+  },
+  "activity": {
+    "central": {
+      "0a330ccc1aeae1b96c91c81967e6023822410fe406939dedc76e814749309a7e": {
+        "activity_id": "0a330ccc1aeae1b96c91c81967e6023822410fe406939dedc76e814749309a7e",
+        "task_id": "01a0692f-7c26-78f3-af2e-58285c7013bb",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "termal",
+          "actor_kind": "agent"
+        },
+        "state": "finished",
+        "state_revision": 2,
+        "event_id": "de2ab965b378c6b8a7ebe2a2e6967b7359152fa1a81c65de30eb342f38cd93bb"
+      }
+    }
+  }
+}

@@ -1,0 +1,31 @@
+{
+  "id": "01a0781c-040b-7ca0-9b11-ecf4f47a8ae9",
+  "external_ref": null,
+  "title": "Drop dead #nowarn directives from FSharpSemantic.Contracts.fs",
+  "outcome": "Keep the extracted F# contracts file free of blanket warning suppressions that cannot apply to its current contents",
+  "acceptance": [
+    "FSharpSemantic.Contracts.fs contains no #nowarn directive and dotnet build PhoenixCodeNav.sln -c Release completes with literal 0 warnings and 0 errors"
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "task",
+  "priority": 3,
+  "labels": [
+    "agent-experience",
+    "architecture",
+    "fsharp",
+    "maintainability",
+    "review",
+    "structure"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "cancelled",
+  "parent_id": "01a07795-f3da-7ce3-978d-0b6f0ba39eff",
+  "child_requirement": "optional",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": "Superseded by independent root w-94a39063e88b after Fable corrected the review premise: root Directory.Build.props enables Nullable, so each directive needs one-at-a-time Release build proof; optional child must not remain attached to the packet item.",
+  "completion": null
+}

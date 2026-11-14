@@ -1,0 +1,87 @@
+{
+  "id": "01a078ae-bdca-7b30-a846-3887ea1da0de",
+  "external_ref": null,
+  "title": "Test runs leak temp workspaces and write volume: make gate-run temp cleanup deterministic and measured",
+  "outcome": "A full gate run (wrapper) leaves no new directories or files under the user TEMP folder and reports its temp footprint; leaked workspaces are a failure classified per test, not a best-effort stderr line.",
+  "acceptance": [
+    "Before/after counts of TEMP entries around a full wrapper run differ by zero (measured on the gate host); each formerly leaking test fixture releases its handles (watchers, daemons, FCS, SQLite) before DeleteWorkspace and the retry budget is never exhausted",
+    "The wrapper prints the TEMP entry delta per run so a leak is visible on the next gate"
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "bug",
+  "priority": 1,
+  "labels": [
+    "infrastructure",
+    "testing"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "completed",
+  "parent_id": null,
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": {
+    "summary": "Made test workspace cleanup deterministic and measured across the gate campaign, with bounded external-process lifecycle handling, success-gated cleanup ownership, strict in-process proofs, tolerant external-process cleanup, and permanent strict-failure diagnostics.",
+    "completed_at": "2026-09-07T22:48:43.614558200Z",
+    "actor": {
+      "actor_id": "greg/codex",
+      "actor_kind": "agent"
+    }
+  },
+  "activity": {
+    "central": {
+      "9a69f8bf97de678080be9610f9397080a82d880fcafba0ce52e579b85751ff1c": {
+        "activity_id": "9a69f8bf97de678080be9610f9397080a82d880fcafba0ce52e579b85751ff1c",
+        "task_id": "01a078ae-bdca-7b30-a846-3887ea1da0de",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "greg/codex",
+          "actor_kind": "agent"
+        },
+        "state": "started",
+        "state_revision": 1,
+        "event_id": "9a69f8bf97de678080be9610f9397080a82d880fcafba0ce52e579b85751ff1c"
+      },
+      "dd3cf32f0c31a08e75c94a9f9cdb3199ab252156593b0ed650dd83b60ca2964c": {
+        "activity_id": "dd3cf32f0c31a08e75c94a9f9cdb3199ab252156593b0ed650dd83b60ca2964c",
+        "task_id": "01a078ae-bdca-7b30-a846-3887ea1da0de",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "greg/codex",
+          "actor_kind": "agent"
+        },
+        "state": "started",
+        "state_revision": 1,
+        "event_id": "dd3cf32f0c31a08e75c94a9f9cdb3199ab252156593b0ed650dd83b60ca2964c"
+      },
+      "eac4b77c8a3b33198350e788180a6a2af6386031ec1889a82923766f7c8f9819": {
+        "activity_id": "eac4b77c8a3b33198350e788180a6a2af6386031ec1889a82923766f7c8f9819",
+        "task_id": "01a078ae-bdca-7b30-a846-3887ea1da0de",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "greg/codex",
+          "actor_kind": "agent"
+        },
+        "state": "finished",
+        "state_revision": 2,
+        "event_id": "25e51b275ab600c203649960fc0c81edf25873ff77dd71b6eff5f8c476a9603f"
+      },
+      "fed666ac464074fcfccb0c98c1b5f3f225ecda3e48b887a847fe482ac1dbf4ec": {
+        "activity_id": "fed666ac464074fcfccb0c98c1b5f3f225ecda3e48b887a847fe482ac1dbf4ec",
+        "task_id": "01a078ae-bdca-7b30-a846-3887ea1da0de",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "greg/codex",
+          "actor_kind": "agent"
+        },
+        "state": "started",
+        "state_revision": 1,
+        "event_id": "fed666ac464074fcfccb0c98c1b5f3f225ecda3e48b887a847fe482ac1dbf4ec"
+      }
+    }
+  }
+}

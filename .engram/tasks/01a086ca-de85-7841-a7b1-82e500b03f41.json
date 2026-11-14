@@ -1,0 +1,54 @@
+{
+  "id": "01a086ca-de85-7841-a7b1-82e500b03f41",
+  "external_ref": null,
+  "title": "Derive UsingMicrosoftNETSdk from shared project SDK context",
+  "outcome": "Derive UsingMicrosoftNETSdk from shared project SDK context",
+  "acceptance": [
+    "Cold/delta captured Exists dependencies agree with semantic evaluation; necessary capability/version/schema updates, full green quality gates, and complete dual review with no remaining Critical/High findings.",
+    "Regression using the screenshot condition fails before the fix, then evaluates UsingMicrosoftNETSdk=true for admitted .NET SDK project declarations before early imports.",
+    "SDK context recognition is shared across C# and F# consumers without unconditional defaults for non-SDK projects, new unsupported-SDK authority, or changed numeric budgets; decisive no-SDK/unknown/override tests cover boundaries."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "bug",
+  "priority": 1,
+  "labels": [
+    "csharp",
+    "fsharp",
+    "semantic-correctness",
+    "shared-evaluation"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "completed",
+  "parent_id": null,
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": {
+    "summary": "Implemented shared project-root SDK context in Core for v0.12.99/schema37. Admitted Microsoft.NET.Sdk roots supply UsingMicrosoftNETSdk/UsingNETSdkDefaults=true before F# early imports; non-SDK/unsupported roots do not receive invented flags, and later assignments remain authoritative. C# uses the same reader only within bounded CPM, withholding unproven seeds under indexed Directory.Build authority. Screenshot regression RED before fix then GREEN; 41 SDK/authority cases, broad493/0, complete1717/0/2 expected Unix skips, format clean/Release0warnings0errors, fresh MCP47/0 and website167/167. Cold/delta/pinned Exists coverage included; no numeric budgets changed. Same original Codex6506 and Claude6507 completed full13-path review CLEAN; High plus original Lows fixed, one new Low manifest qualifier deferred as standalone w-0b5e9e0f4dc2. Reviewers inspected source and parent-run RED/GREEN traces, not reviewer-run tests; Codex optional standalone probe still OS5-blocked. Thirteen-path inventory stable, no source edits after review, nothing staged; not committed/pushed and awaiting explicit user authority for either.",
+    "completed_at": "2026-09-09T17:03:13.248976400Z",
+    "actor": {
+      "actor_id": "greg/codex",
+      "actor_kind": "agent"
+    }
+  },
+  "activity": {
+    "central": {
+      "90a3f942f9c5702d0c2ffeee94070310f7a54709d51a487f4d2c2f01a67ba0f8": {
+        "activity_id": "90a3f942f9c5702d0c2ffeee94070310f7a54709d51a487f4d2c2f01a67ba0f8",
+        "task_id": "01a086ca-de85-7841-a7b1-82e500b03f41",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "greg/codex",
+          "actor_kind": "agent"
+        },
+        "state": "finished",
+        "state_revision": 2,
+        "event_id": "6865baf120008c993f437e7e6d88bf1dfa97bd7e7882aa2ed35381a3772d6851"
+      }
+    }
+  }
+}

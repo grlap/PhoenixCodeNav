@@ -1,0 +1,28 @@
+{
+  "id": "01a08dfc-b6cc-7791-a455-598c53b35df0",
+  "external_ref": null,
+  "title": "Cover mixed-case compile-source extensions in search_text orphaned annotation tests",
+  "outcome": "Cover mixed-case compile-source extensions in search_text orphaned annotation tests",
+  "acceptance": [
+    "Public token and regex tests include mixed-case orphan source extensions such as .CS and .FSI, assert orphaned:true plus Overview parity, and fail under a case-sensitive eligibility-filter mutation."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "task",
+  "priority": 3,
+  "labels": [
+    "review",
+    "search",
+    "testing"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "superseded",
+  "parent_id": "01a063dd-634e-7851-87df-a923d68a92d1",
+  "child_requirement": "optional",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": "01a08e04-035d-7c70-a3b0-bf5f7478ab83",
+  "disposal_reason": "Continue as independent P3 follow-up after completion of w-a923d68a92d1. Preserve original Claude session-6565 review provenance in the existing creation note; detachment repairs parent-completed availability only, without implementing work or reopening the parent. Requested by Advisor #68.",
+  "completion": null
+}

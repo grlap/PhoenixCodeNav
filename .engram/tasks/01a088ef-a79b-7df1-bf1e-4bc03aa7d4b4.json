@@ -1,0 +1,28 @@
+{
+  "id": "01a088ef-a79b-7df1-bf1e-4bc03aa7d4b4",
+  "external_ref": null,
+  "title": "Account for imported project references in the Phoenix C# compiler model",
+  "outcome": "Account for imported project references in the Phoenix C# compiler model",
+  "acceptance": [
+    "The actual C# indexed SemanticWorkspace model handles the guarded Directory.Build.targets ProjectReference fixture: Dependency is present in App.ProjectReferences, its type resolves and CS0246 is absent, with a direct-csproj control. Establish and disclose the admitted import authority; successful project loading alone is not sufficient."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "task",
+  "priority": 2,
+  "labels": [
+    "csharp",
+    "msbuild",
+    "semantic-correctness"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "cancelled",
+  "parent_id": null,
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": "Withdrawn as proposed implementation work: the requested reproduction is complete and does not authorize changing the C# architecture. Phoenix::Fable reports Greg explicitly excluded C# changes in mailbox #998/#1001 and withdrew the public-envelope investigation. Preserve the measured internal compiler-model observation and its evidence limitations as knowledge; no C# defect fix or parity work is planned. Cancellation is a scope decision, not implementation or a claim that the diagnostic observation was disproved.",
+  "completion": null
+}

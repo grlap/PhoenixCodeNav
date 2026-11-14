@@ -1,0 +1,54 @@
+{
+  "id": "01a087e8-d955-7d92-aa6a-d6e367b8cf64",
+  "external_ref": null,
+  "title": "Scope invariant-condition Choose coverage as defensive-only",
+  "outcome": "Scope invariant-condition Choose coverage as defensive-only",
+  "acceptance": [
+    "Choose test documents MSBuild rejection of Condition on Choose; design does not advertise it as a valid-project capability."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "task",
+  "priority": 2,
+  "labels": [
+    "csharp",
+    "fsharp",
+    "msbuild",
+    "review",
+    "semantic-correctness",
+    "testing"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "completed",
+  "parent_id": "01a087c1-16bb-71d0-b87d-168e1dc3ce1e",
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": {
+    "summary": "Documented and tested skipped Choose as defensive-only, not a valid MSBuild shape; original Claude reviewer verified resolved; full final suite green.",
+    "completed_at": "2026-09-09T21:16:19.776488500Z",
+    "actor": {
+      "actor_id": "greg/codex",
+      "actor_kind": "agent"
+    }
+  },
+  "activity": {
+    "central": {
+      "810c52fb1a0c6d3d26fb6402ef8f016045ef5904b6e05e7417aa8354d5ee02c5": {
+        "activity_id": "810c52fb1a0c6d3d26fb6402ef8f016045ef5904b6e05e7417aa8354d5ee02c5",
+        "task_id": "01a087e8-d955-7d92-aa6a-d6e367b8cf64",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "greg/codex",
+          "actor_kind": "agent"
+        },
+        "state": "finished",
+        "state_revision": 2,
+        "event_id": "233863f09b026bae5e9fde0c56ea9ff829388dbd0210e0640756b72a0b611432"
+      }
+    }
+  }
+}

@@ -1,0 +1,32 @@
+{
+  "id": "01a074e7-5ccb-7000-85b9-995c13a4b776",
+  "external_ref": null,
+  "title": "Pin and clarify cross-project F# call-group attribution",
+  "outcome": "Make groups[].callSites attributable to the physical project that owns each accepted call site.",
+  "acceptance": [
+    "A Consumer/Library regression pins groups[].callSites for a call found through a ProjectReference closure",
+    "Group project/TFM labels and call-site ownership cannot attribute a Library site to Consumer",
+    "Workspace totals and physical-site deduplication remain unchanged"
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "bug",
+  "priority": 2,
+  "labels": [
+    "fsharp",
+    "mcp-contract",
+    "review",
+    "semantic",
+    "testing"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "open",
+  "parent_id": "01a063dd-580b-7480-8d28-895853574bf6",
+  "child_requirement": "optional",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": null
+}

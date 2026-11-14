@@ -1,0 +1,59 @@
+{
+  "id": "01a06ec3-2b25-79a0-bc69-89d0d8974a3d",
+  "external_ref": null,
+  "title": "Attribute F# semantic cold starts truthfully: F# semantic navigation (FCS project options, parse and check) omits timing.semanticColdStart and emits no semanticOp record; add an F#-shaped bounded attribution and operation record instead of reusing C# phase names",
+  "outcome": "Attribute F# semantic cold starts truthfully: F# semantic navigation (FCS project options, parse and check) omits timing.semanticColdStart and emits no semanticOp record; add an F#-shaped bounded attribution and operation record instead of reusing C# phase names",
+  "acceptance": [
+    "Attribute F# semantic cold starts truthfully: F# semantic navigation (FCS project options, parse and check) omits timing.semanticColdStart and emits no semanticOp record; add an F#-shaped bounded attribution and operation record instead of reusing C# phase names is done"
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "task",
+  "priority": 1,
+  "labels": [],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "completed",
+  "parent_id": "01a063dd-5c87-7403-9486-fddc946bf93b",
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": {
+    "summary": "Published 4294b363770d85fda540a2265b79e51bc6196fcf; installed v0.12.109 at C:/tools/phoenix-pilot. Six-tool F# timing attribution and one post-budget operation record delivered without semantic answer/confidence changes; version 0.12.109, schema42 unchanged.",
+    "completed_at": "2026-09-12T01:10:02.201462200Z",
+    "actor": {
+      "actor_id": "greg/codex",
+      "actor_kind": "agent"
+    }
+  },
+  "activity": {
+    "central": {
+      "491dbbced503fa39d6d0447e801285acb3ab38f6bbecaca153587b7f51a3f1e7": {
+        "activity_id": "491dbbced503fa39d6d0447e801285acb3ab38f6bbecaca153587b7f51a3f1e7",
+        "task_id": "01a06ec3-2b25-79a0-bc69-89d0d8974a3d",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "greg/codex",
+          "actor_kind": "agent"
+        },
+        "state": "released",
+        "state_revision": 2,
+        "event_id": "ae0f1b8fbd61f3dc033c53de4faeca784cc6f7ff8e812b3987844cc4e53fe238"
+      },
+      "9fa6b7568f5b7e877cd655c091fd54ecf841bb2de36c6ba632650913a8e90d09": {
+        "activity_id": "9fa6b7568f5b7e877cd655c091fd54ecf841bb2de36c6ba632650913a8e90d09",
+        "task_id": "01a06ec3-2b25-79a0-bc69-89d0d8974a3d",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "greg/codex",
+          "actor_kind": "agent"
+        },
+        "state": "finished",
+        "state_revision": 2,
+        "event_id": "77c39f0abc67c4e47d0f49aae6c99521c72ab80ae85eadaf7d3570e49e50a611"
+      }
+    }
+  }
+}

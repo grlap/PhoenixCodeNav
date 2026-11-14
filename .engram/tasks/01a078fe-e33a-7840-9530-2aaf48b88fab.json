@@ -1,0 +1,53 @@
+{
+  "id": "01a078fe-e33a-7840-9530-2aaf48b88fab",
+  "external_ref": null,
+  "title": "Make the long-submodule review_pack fixture work under the private gate TEMP root",
+  "outcome": "Make the long-submodule review_pack fixture work under the private gate TEMP root",
+  "acceptance": [
+    "CodeNav.Tests.Batch42Tests.ReviewPackReportsExcludedSubmoduleCoverageAndChangedGitlinks passes when TEMP and TMP point to a PhoenixCodeNav-gate-<guid> private root",
+    "The complete gate wrapper finishes GATES GREEN with private TEMP cleanup and no survivor or cleanup failure"
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "bug",
+  "priority": 1,
+  "labels": [
+    "infrastructure",
+    "review",
+    "temp-cleanup",
+    "testing"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "completed",
+  "parent_id": "01a078ae-bdca-7b30-a846-3887ea1da0de",
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": {
+    "summary": "Made the long-submodule review_pack fixture robust under the private gate TEMP root and verified it in the complete suite.",
+    "completed_at": "2026-09-06T23:32:53.615900300Z",
+    "actor": {
+      "actor_id": "greg/codex",
+      "actor_kind": "agent"
+    }
+  },
+  "activity": {
+    "central": {
+      "9f3b7d3d39a7d9bd57340365c9c8117b4585666a473594f463a78d31d9588cd9": {
+        "activity_id": "9f3b7d3d39a7d9bd57340365c9c8117b4585666a473594f463a78d31d9588cd9",
+        "task_id": "01a078fe-e33a-7840-9530-2aaf48b88fab",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "greg/codex",
+          "actor_kind": "agent"
+        },
+        "state": "finished",
+        "state_revision": 2,
+        "event_id": "5e4c55243620e5c2cf99f8a2875c69291cdbd1e604c59d40faebf34036cba2a3"
+      }
+    }
+  }
+}

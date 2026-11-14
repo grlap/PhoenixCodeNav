@@ -1,0 +1,64 @@
+{
+  "id": "01a07540-c2f1-7bd3-914d-176b1ffc9cff",
+  "external_ref": null,
+  "title": "Resolve website review precision and presentation findings",
+  "outcome": "Resolve website review precision and presentation findings",
+  "acceptance": [
+    "Desktop type-scale check targets rendered content, particle density follows sphere size without changing desktop appearance, and disclosure sections are numbered 01-03.",
+    "F# FAQ/verifier precisely exclude only compatibility fallback from multi-target children, not explicit selection or exact matches.",
+    "Website checks and focused browser evidence pass; final unchanged bytes receive an accepted complete dual review before the delivering commit."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "task",
+  "priority": 2,
+  "labels": [
+    "review",
+    "website"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "completed",
+  "parent_id": null,
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": {
+    "summary": "Delivered by e5ef63f391368c5eb9c0bf16e43aa67c5e7d7f08. The original resumed 6324/6325 attempt was INCONCLUSIVE because no attempt-2 dispatched; final unchanged bytes were instead verified CLEAN/CLEAN by fresh read-only sessions 6332/6333 and explicitly accepted by Fable. Frozen digest 8e2706d5bd8728a6183a1007adfd6237143e9f6dae1a014cf3db127ed7d37e29; full wrapper GREEN.",
+    "completed_at": "2026-09-06T09:22:51.966580Z",
+    "actor": {
+      "actor_id": "greg/codex",
+      "actor_kind": "agent"
+    }
+  },
+  "activity": {
+    "central": {
+      "af83e9fa9b9055dd62a050169c0f2e97de5c74e79d1779b4b268d8face1888b9": {
+        "activity_id": "af83e9fa9b9055dd62a050169c0f2e97de5c74e79d1779b4b268d8face1888b9",
+        "task_id": "01a07540-c2f1-7bd3-914d-176b1ffc9cff",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "greg/codex",
+          "actor_kind": "agent"
+        },
+        "state": "finished",
+        "state_revision": 2,
+        "event_id": "b8e84b29ae08abed06457e2723aeb3b82ae6316bb100d48428f829a8eede3595"
+      },
+      "c101af68c18bf05fdda91af2aa7726b7b8862d249328a35971a48cff0ea5a5ba": {
+        "activity_id": "c101af68c18bf05fdda91af2aa7726b7b8862d249328a35971a48cff0ea5a5ba",
+        "task_id": "01a07540-c2f1-7bd3-914d-176b1ffc9cff",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "greg/codex",
+          "actor_kind": "agent"
+        },
+        "state": "started",
+        "state_revision": 1,
+        "event_id": "c101af68c18bf05fdda91af2aa7726b7b8862d249328a35971a48cff0ea5a5ba"
+      }
+    }
+  }
+}

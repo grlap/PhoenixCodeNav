@@ -1,0 +1,52 @@
+{
+  "id": "01a063dd-5c87-7403-9486-fddc946bf93b",
+  "external_ref": null,
+  "title": "Make first-call semantic cold start observable and exact by default",
+  "outcome": "Make first-call semantic cold start observable and exact by default",
+  "acceptance": [
+    "Make first-call semantic cold start observable and exact by default is done"
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "task",
+  "priority": 1,
+  "labels": [],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "open",
+  "parent_id": null,
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": null,
+  "activity": {
+    "central": {
+      "960310b7a4981b8bb3e78f526ee636718f44487123c8f4472148a9e44e72c097": {
+        "activity_id": "960310b7a4981b8bb3e78f526ee636718f44487123c8f4472148a9e44e72c097",
+        "task_id": "01a063dd-5c87-7403-9486-fddc946bf93b",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "fable",
+          "actor_kind": "agent"
+        },
+        "state": "released",
+        "state_revision": 2,
+        "event_id": "8ec60f6d61e90a064387a70ca2bb7017ad92f1867b82de272d0ff42767791710"
+      },
+      "d560d5674d9528b58ce9f41ca2d6586ab5f52b9959891a1c568c31aebecc9723": {
+        "activity_id": "d560d5674d9528b58ce9f41ca2d6586ab5f52b9959891a1c568c31aebecc9723",
+        "task_id": "01a063dd-5c87-7403-9486-fddc946bf93b",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "greg/codex",
+          "actor_kind": "agent"
+        },
+        "state": "released",
+        "state_revision": 2,
+        "event_id": "ddff8754684ccd064979c19ca8165ffc15ccfc22d4656c4c2207402f0986497c"
+      }
+    }
+  }
+}

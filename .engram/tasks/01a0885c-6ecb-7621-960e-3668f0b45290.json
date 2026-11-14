@@ -1,0 +1,32 @@
+{
+  "id": "01a0885c-6ecb-7621-960e-3668f0b45290",
+  "external_ref": null,
+  "title": "Refuse the assumed-empty optional-property guard for MSBuild intrinsic properties",
+  "outcome": "Refuse the assumed-empty optional-property guard for MSBuild intrinsic properties",
+  "acceptance": [
+    "Known MSBuild-provided property names are excluded from the optional-empty policy without broadening invariant-property proofs or reserved-assignment refusal; ordinary optional user properties retain the approved behavior.",
+    "PropertyGroup guards on missing MSBuildThisFileDirectory and MSBuildProjectDirectory refuse with fsharp_semantic_condition_property_unresolved and no fsharp_semantic_optional_property_assumed_empty reason."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "bug",
+  "priority": 2,
+  "labels": [
+    "architecture",
+    "csharp",
+    "fsharp",
+    "msbuild",
+    "review",
+    "semantic-correctness"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "superseded",
+  "parent_id": "01a0882a-126b-7f81-8a4b-3f1504bf2d37",
+  "child_requirement": "optional",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": "01a08871-6a84-7aa1-9265-c202f2be4cd9",
+  "disposal_reason": "Greg requested an agreed follow-up plan with Fable. Continue that planned work independently of the completed Private/optional-guard batch so it is discoverable and claimable; preserve original review provenance in notes.",
+  "completion": null
+}

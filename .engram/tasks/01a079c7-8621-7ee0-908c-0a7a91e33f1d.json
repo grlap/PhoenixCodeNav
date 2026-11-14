@@ -1,0 +1,27 @@
+{
+  "id": "01a079c7-8621-7ee0-908c-0a7a91e33f1d",
+  "external_ref": null,
+  "title": "Keep gate-summary.ps1 ASCII-only or add a BOM",
+  "outcome": "Keep the gate's manual cleanup remedy legible on every PowerShell host used by the repository.",
+  "acceptance": [
+    "The operator-facing stale-root remedy text renders correctly in both pwsh and Windows PowerShell 5.1 by using ASCII-only text or an explicit UTF-8 BOM."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "task",
+  "priority": 3,
+  "labels": [
+    "review",
+    "testing"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "open",
+  "parent_id": null,
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": null
+}

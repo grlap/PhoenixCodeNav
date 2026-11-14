@@ -1,0 +1,48 @@
+{
+  "id": "01a063dd-916c-7401-8607-11d31bcbb0fc",
+  "external_ref": null,
+  "title": "Serve concise agent-first MCP instructions",
+  "outcome": "Every MCP session receives a short routing and recovery contract that teaches agents to use Phoenix's highest-value tools correctly before their first call.",
+  "acceptance": [
+    "A product-boundary test reads the MCP handshake instructions and decisively asserts every routed tool and recovery rule.",
+    "McpApplication.ServerInstructions routes by intent and names context_pack, impact, review_pack, and related_tests alongside the core discovery tools.",
+    "The capability is represented by its own features[] identifier and BuildInfo.Version is bumped.",
+    "The instructions remain concise and accurately describe C# and F# boundaries.",
+    "The served text states in one sentence each that domain failures are structured content and that retryRecommended plus retryHint govern transient retries."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "feature",
+  "priority": 1,
+  "labels": [
+    "agent-experience",
+    "discovery",
+    "mcp-contract"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "open",
+  "parent_id": null,
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": null,
+  "activity": {
+    "central": {
+      "e7b3dd6cc4c00b23cde0bf879fefde13b7d067e03329efa2c2db263006ae8412": {
+        "activity_id": "e7b3dd6cc4c00b23cde0bf879fefde13b7d067e03329efa2c2db263006ae8412",
+        "task_id": "01a063dd-916c-7401-8607-11d31bcbb0fc",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "fable",
+          "actor_kind": "agent"
+        },
+        "state": "released",
+        "state_revision": 2,
+        "event_id": "64b39040cf4147977680c92ded993691d1fb86bf5ee12dc1d9e461c4489e7dd6"
+      }
+    }
+  }
+}

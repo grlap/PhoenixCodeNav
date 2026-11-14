@@ -1,0 +1,52 @@
+{
+  "id": "01a06a95-4af1-72e2-b50f-2f99cdd9b3e0",
+  "external_ref": null,
+  "title": "Make cluster_cold_load partialReason and retryHint prescribe one recovery",
+  "outcome": "Make cluster_cold_load partialReason and retryHint prescribe one recovery",
+  "acceptance": [
+    "A single cluster_cold_load response has consistent partialReason and retryHint guidance supported by the actual cancellation lifecycle.",
+    "The guidance remains actionable at the documented maximum timeout."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "bug",
+  "priority": 2,
+  "labels": [
+    "mcp-contract",
+    "review",
+    "semantic-correctness"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "completed",
+  "parent_id": "01a06999-065c-7ef3-97f9-6bc6a6d1436d",
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": {
+    "summary": "cluster_cold_load partialReason and retryHint now consistently prescribe deadline-aware retry behavior, including at-maximum handling.",
+    "completed_at": "2026-09-04T05:09:32.889923500Z",
+    "actor": {
+      "actor_id": "termal",
+      "actor_kind": "agent"
+    }
+  },
+  "activity": {
+    "central": {
+      "8f82047e2ee1b3cdaa07842f63a3a9a8b6db37591a8f9f7b387554460a8d65b9": {
+        "activity_id": "8f82047e2ee1b3cdaa07842f63a3a9a8b6db37591a8f9f7b387554460a8d65b9",
+        "task_id": "01a06a95-4af1-72e2-b50f-2f99cdd9b3e0",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "termal",
+          "actor_kind": "agent"
+        },
+        "state": "finished",
+        "state_revision": 2,
+        "event_id": "a49ce73f2f37837810d57e81585857da019fd0e97c55c7c5b9d585d6bfd4fef5"
+      }
+    }
+  }
+}

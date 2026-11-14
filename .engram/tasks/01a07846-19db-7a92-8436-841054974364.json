@@ -1,0 +1,55 @@
+{
+  "id": "01a07846-19db-7a92-8436-841054974364",
+  "external_ref": null,
+  "title": "Packet 4b: Split outline and source_context out of NavigationTools.Search.cs",
+  "outcome": "NavigationTools.Search.cs owns search concerns while outline/source navigation lives in NavigationTools.Outline.cs with unchanged MCP behavior.",
+  "acceptance": [
+    "Full quality gates and dual-agent review pass",
+    "NavigationTools.Outline.cs owns the outline/source section, including Outline, SourceContext, ReadLinesUpTo, and any helper used only by them; NavigationTools.Search.cs retains find_file, search_text, OwningSymbols, RegexResponse, and search_symbol",
+    "The two-path pure move preserves all MCP tool names, attributes, defaults, member bodies, and behavior; color-moved and multiset proofs pass"
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "task",
+  "priority": 3,
+  "labels": [
+    "agent-experience",
+    "architecture",
+    "maintainability",
+    "review",
+    "structure"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "completed",
+  "parent_id": "01a0748d-2331-79e0-a8a4-c57d709cd778",
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": {
+    "summary": "Committed 2d2279607ec277d6efd7ffecaff9c5186dd6c25c after exact two-path freeze 4efbbfd16dbe6c2023b3d8a0ba1f63d0ad00ff4196be9271b7daf5444def19b2, full GATES GREEN, independent Fable freeze confirmation, and completed Codex/Claude review (sessions 6370/6371). Outline, SourceContext, and ReadLinesUpTo moved as the proven exact 348-line block; tool/member inventories remain unchanged. Post-commit tree blobs equal the appendix, worktree is clean, origin/main remains 7f1c34a, and no push was performed. Cosmetic double-blank Low is deferred explicitly to w-7fdc7a895050.",
+    "completed_at": "2026-09-06T20:31:08.010931300Z",
+    "actor": {
+      "actor_id": "greg/codex",
+      "actor_kind": "agent"
+    }
+  },
+  "activity": {
+    "central": {
+      "2cb4cd8f56c8e07ef8f8b3ca46e24b1c2267012e8c7e8dcf77576455f497e029": {
+        "activity_id": "2cb4cd8f56c8e07ef8f8b3ca46e24b1c2267012e8c7e8dcf77576455f497e029",
+        "task_id": "01a07846-19db-7a92-8436-841054974364",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "greg/codex",
+          "actor_kind": "agent"
+        },
+        "state": "finished",
+        "state_revision": 2,
+        "event_id": "a8926acaebc05755b11e03013d862cf3ee1fe62a1fb461a305070ba3f11f203c"
+      }
+    }
+  }
+}

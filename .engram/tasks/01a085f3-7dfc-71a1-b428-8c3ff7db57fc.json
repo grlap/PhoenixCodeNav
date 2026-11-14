@@ -1,0 +1,31 @@
+{
+  "id": "01a085f3-7dfc-71a1-b428-8c3ff7db57fc",
+  "external_ref": null,
+  "title": "Guard global package version lookup against inconsistent expansion normalization",
+  "outcome": "Guard global package version lookup against inconsistent expansion normalization",
+  "acceptance": [
+    "Global Include expansion uses consistent normalized identities; inconsistent callback results fail closed rather than throwing a missing-key exception."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "task",
+  "priority": 3,
+  "labels": [
+    "architecture",
+    "correctness",
+    "csharp",
+    "fsharp",
+    "review",
+    "semantic-correctness"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "open",
+  "parent_id": null,
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": null
+}

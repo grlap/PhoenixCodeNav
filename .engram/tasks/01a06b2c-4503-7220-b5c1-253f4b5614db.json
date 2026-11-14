@@ -1,0 +1,29 @@
+{
+  "id": "01a06b2c-4503-7220-b5c1-253f4b5614db",
+  "external_ref": null,
+  "title": "Cover DaemonProxy retirement catch wiring for both stable takeover causes",
+  "outcome": "Regression coverage proves the proxy catch wiring preserves both typed retirement causes through the unavailable shim.",
+  "acceptance": [
+    "A test drives the proxy retirement path for daemon_takeover_timeout",
+    "A test drives the proxy retirement path for daemon_writer_lease_unverifiable",
+    "Both tests assert the resulting DaemonProxyFailureException cause and retryability"
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "task",
+  "priority": 3,
+  "labels": [
+    "review",
+    "testing"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "superseded",
+  "parent_id": "01a06884-02d0-7041-91b2-f26f6dd69464",
+  "child_requirement": "optional",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": "01a091fc-664e-7390-a9e9-d3a4583ea876",
+  "disposal_reason": "Continue as independent work. Coordinator-assigned daemon batch after completed parent; preserve acceptance and origin without reopening the parent.",
+  "completion": null
+}

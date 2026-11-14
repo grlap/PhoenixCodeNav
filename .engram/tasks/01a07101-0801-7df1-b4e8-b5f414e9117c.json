@@ -1,0 +1,50 @@
+{
+  "id": "01a07101-0801-7df1-b4e8-b5f414e9117c",
+  "external_ref": null,
+  "title": "Make the F# companion-path closure regression decisive",
+  "outcome": "Make the F# companion-path closure regression decisive",
+  "acceptance": [
+    "The test fails if both the literal legacy project and its .Net companion enter the semantic closure."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "task",
+  "priority": 2,
+  "labels": [
+    "review",
+    "testing"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "completed",
+  "parent_id": "01a063dd-599c-7253-999b-3eff45080442",
+  "child_requirement": "optional",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": {
+    "summary": "Made the .Net companion declare the same module, binding, and assembly identity so accidental admission now produces an observable conflict.",
+    "completed_at": "2026-09-05T10:39:24.050108900Z",
+    "actor": {
+      "actor_id": "greg/codex",
+      "actor_kind": "agent"
+    }
+  },
+  "activity": {
+    "central": {
+      "275a4f4c0358478dc88038ab5fa2274c998e1dafdcb4c8dfc0beb62ac4aeded7": {
+        "activity_id": "275a4f4c0358478dc88038ab5fa2274c998e1dafdcb4c8dfc0beb62ac4aeded7",
+        "task_id": "01a07101-0801-7df1-b4e8-b5f414e9117c",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "greg/codex",
+          "actor_kind": "agent"
+        },
+        "state": "finished",
+        "state_revision": 2,
+        "event_id": "9d439e23563683a644d38e1d0781c2e99160bdfac25cbd3e03bba01875aa6a6e"
+      }
+    }
+  }
+}

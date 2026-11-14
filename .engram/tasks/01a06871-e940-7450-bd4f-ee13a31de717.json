@@ -1,0 +1,53 @@
+{
+  "id": "01a06871-e940-7450-bd4f-ee13a31de717",
+  "external_ref": null,
+  "title": "Make cold-start not-ready responses guide agents to retry Phoenix",
+  "outcome": "Transient index-building and refresh-sweep readiness responses keep agents on Phoenix with executable retry guidance instead of recommending shell fallback.",
+  "acceptance": [
+    "A product test at the CLI boundary parks the sweep and asserts exit 1 plus the exact retry fields.",
+    "Not-ready index_unavailable/index_building envelopes set retryRecommended true and tell agents to poll server_capabilities until index.state is ready before repeating the same call.",
+    "The transient readiness hint no longer recommends shell search."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "bug",
+  "priority": 2,
+  "labels": [
+    "agent-experience",
+    "cold-start",
+    "mcp-contract"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "completed",
+  "parent_id": null,
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": {
+    "summary": "Delivered cold-start not-ready guidance that keeps agents on Phoenix with an executable retry contract.",
+    "completed_at": "2026-09-04T15:48:48.801693600Z",
+    "actor": {
+      "actor_id": "greg/codex",
+      "actor_kind": "agent"
+    }
+  },
+  "activity": {
+    "central": {
+      "441a842863a9199fd85aa9bb25a4417f9fb7acdb65cb4f73ee0b1d2262a7e385": {
+        "activity_id": "441a842863a9199fd85aa9bb25a4417f9fb7acdb65cb4f73ee0b1d2262a7e385",
+        "task_id": "01a06871-e940-7450-bd4f-ee13a31de717",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "greg/codex",
+          "actor_kind": "agent"
+        },
+        "state": "finished",
+        "state_revision": 2,
+        "event_id": "b348a23ef7a6acf4d73f8efe878ed557d35f6cfefa8b73f28bc7a5bf6763157f"
+      }
+    }
+  }
+}

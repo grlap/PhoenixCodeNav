@@ -1,0 +1,53 @@
+{
+  "id": "01a08929-c6b7-7060-90ef-918cdcea4fe0",
+  "external_ref": null,
+  "title": "Make the item precision predicate case-insensitive",
+  "outcome": "Make the item precision predicate case-insensitive",
+  "acceptance": [
+    "Canonical and case-variant Compile/Reference/ProjectReference names receive the same precision; unrelated later writes succeed and consumed-property writes still refuse."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "task",
+  "priority": 3,
+  "labels": [
+    "architecture",
+    "fsharp",
+    "msbuild",
+    "review",
+    "semantic-correctness"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "completed",
+  "parent_id": "01a088ef-a787-7fe1-9ea2-14952bbf776b",
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": {
+    "summary": "Both original reviewers verify shared OrdinalIgnoreCase IsDirectSemanticItemName in admission/precision. Six lower/mixed RED failures corrected, canonical controls pass, all consumed writes still refuse. Codex independently probed representative variants.",
+    "completed_at": "2026-09-10T02:59:48.178565800Z",
+    "actor": {
+      "actor_id": "greg/codex",
+      "actor_kind": "agent"
+    }
+  },
+  "activity": {
+    "central": {
+      "53a1ea63bd9b0781ce51ccea12e6ba0d5d17da3e2c6d50fcd2d4458cf697f746": {
+        "activity_id": "53a1ea63bd9b0781ce51ccea12e6ba0d5d17da3e2c6d50fcd2d4458cf697f746",
+        "task_id": "01a08929-c6b7-7060-90ef-918cdcea4fe0",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "greg/codex",
+          "actor_kind": "agent"
+        },
+        "state": "finished",
+        "state_revision": 2,
+        "event_id": "c0b370229528e1828439182b39e2c1bfd30e6161efcfd6c98f1ebc6a68805594"
+      }
+    }
+  }
+}

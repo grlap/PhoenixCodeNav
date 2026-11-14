@@ -1,0 +1,33 @@
+{
+  "id": "01a0885c-6ee9-76a0-b3da-e179f6104323",
+  "external_ref": null,
+  "title": "Pin the PropertyGroup-only scope of the assumed-empty guard for Target, ItemDefinitionGroup, and When",
+  "outcome": "Pin the PropertyGroup-only scope of the assumed-empty guard for Target, ItemDefinitionGroup, and When",
+  "acceptance": [
+    "Add decisive negative cases for Target, ItemDefinitionGroup, and valid Choose/When traversal guarded on absent OptionalRoot != empty, asserting fsharp_semantic_condition_property_unresolved and absence of the assumed-empty reason.",
+    "Retain existing Import, ItemGroup, child-property, and reference-metadata negative coverage; do not widen the PropertyGroup-only assumption."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "task",
+  "priority": 3,
+  "labels": [
+    "architecture",
+    "csharp",
+    "fsharp",
+    "msbuild",
+    "review",
+    "semantic-correctness",
+    "testing"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "open",
+  "parent_id": "01a0882a-126b-7f81-8a4b-3f1504bf2d37",
+  "child_requirement": "optional",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": null
+}

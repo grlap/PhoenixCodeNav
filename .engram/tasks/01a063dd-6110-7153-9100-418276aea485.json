@@ -1,0 +1,59 @@
+{
+  "id": "01a063dd-6110-7153-9100-418276aea485",
+  "external_ref": null,
+  "title": "Measure monolith compilation-preparation CPU composition",
+  "outcome": "Measure monolith compilation-preparation CPU composition",
+  "acceptance": [
+    "Measure monolith compilation-preparation CPU composition is done"
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "task",
+  "priority": 1,
+  "labels": [],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "completed",
+  "parent_id": "01a063dd-5c87-7403-9486-fddc946bf93b",
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": {
+    "summary": "Added bounded process-wide GC-pause attribution to references compilation-preparation telemetry, restored manifest and telemetry-documentation discipline, validated and dual-reviewed the exact final packet, committed it as 9ce4c26, and completed the required a49b670 RavenDB cold/warm dotnet-trace profile outside the repository.",
+    "completed_at": "2026-09-05T01:55:57.598699200Z",
+    "actor": {
+      "actor_id": "greg/codex",
+      "actor_kind": "agent"
+    }
+  },
+  "activity": {
+    "central": {
+      "ad0376b91ede0bdbf01896ea81af3409aa3e8e6d24e588ef3b9d74ca0dd2677b": {
+        "activity_id": "ad0376b91ede0bdbf01896ea81af3409aa3e8e6d24e588ef3b9d74ca0dd2677b",
+        "task_id": "01a063dd-6110-7153-9100-418276aea485",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "greg/codex",
+          "actor_kind": "agent"
+        },
+        "state": "finished",
+        "state_revision": 2,
+        "event_id": "64e0c415a22b6c198ae525227276f38580db186414a4eed6cefc048a7fe8cf97"
+      },
+      "c84445d7ab4b98f67b37e3b92ff2c8d2bab1d0fb1e0d0d77221d430fe08c4d87": {
+        "activity_id": "c84445d7ab4b98f67b37e3b92ff2c8d2bab1d0fb1e0d0d77221d430fe08c4d87",
+        "task_id": "01a063dd-6110-7153-9100-418276aea485",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "fable",
+          "actor_kind": "agent"
+        },
+        "state": "released",
+        "state_revision": 2,
+        "event_id": "91a8d6ac253952ee5a7f6bba474b067fef14b0ef3dfd0ae62a39649de7615a5a"
+      }
+    }
+  }
+}

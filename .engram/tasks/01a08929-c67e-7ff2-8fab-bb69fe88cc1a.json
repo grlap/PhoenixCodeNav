@@ -1,0 +1,53 @@
+{
+  "id": "01a08929-c67e-7ff2-8fab-bb69fe88cc1a",
+  "external_ref": null,
+  "title": "Make import-marker built-in exclusion tests discriminate",
+  "outcome": "Make import-marker built-in exclusion tests discriminate",
+  "acceptance": [
+    "Self-marked imported documents are rejected for known-provided built-ins and incomplete assigned properties, while the otherwise equivalent absent ordinary user property succeeds with the assumed-empty disclosure."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "task",
+  "priority": 2,
+  "labels": [
+    "fsharp",
+    "msbuild",
+    "review",
+    "semantic-correctness",
+    "testing"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "completed",
+  "parent_id": "01a088ef-a787-7fe1-9ea2-14952bbf776b",
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": {
+    "summary": "Original Codex and Claude verification confirms own unconditional true marker in every negative fixture, absent ordinary-user positive succeeds/discloses, incomplete/OS/MSBuildToolsPath controls refuse.",
+    "completed_at": "2026-09-10T02:59:48.106216600Z",
+    "actor": {
+      "actor_id": "greg/codex",
+      "actor_kind": "agent"
+    }
+  },
+  "activity": {
+    "central": {
+      "ea3e1fd4363a4259ce67a347ed1fb0d3638d271f96424c79d36b6067d1cef93b": {
+        "activity_id": "ea3e1fd4363a4259ce67a347ed1fb0d3638d271f96424c79d36b6067d1cef93b",
+        "task_id": "01a08929-c67e-7ff2-8fab-bb69fe88cc1a",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "greg/codex",
+          "actor_kind": "agent"
+        },
+        "state": "finished",
+        "state_revision": 2,
+        "event_id": "9bd533c5dec4c936831cc613b9fda2b69dbac44619e5e50b69bce41397644642"
+      }
+    }
+  }
+}

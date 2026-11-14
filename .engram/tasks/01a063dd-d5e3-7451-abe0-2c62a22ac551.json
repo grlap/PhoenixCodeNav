@@ -1,0 +1,65 @@
+{
+  "id": "01a063dd-d5e3-7451-abe0-2c62a22ac551",
+  "external_ref": null,
+  "title": "Preserve explicit project-file extensions in selectors",
+  "outcome": "A Foo.csproj selector matches only that filename and never becomes ambiguous merely because Foo.fsproj also exists.",
+  "acceptance": [
+    "A product fixture containing both filenames proves deterministic selection.",
+    "Explicit .csproj and .fsproj filenames preserve their extension; only extensionless stems search both families."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "bug",
+  "priority": 2,
+  "labels": [
+    "agent-experience",
+    "mcp-contract",
+    "navigation",
+    "review"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "completed",
+  "parent_id": "01a063dd-84ee-78b2-be90-a2b82477e5de",
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": {
+    "summary": "Delivered deterministic extension-preserving project selector resolution.",
+    "completed_at": "2026-09-04T15:48:48.370977900Z",
+    "actor": {
+      "actor_id": "greg/codex",
+      "actor_kind": "agent"
+    }
+  },
+  "activity": {
+    "central": {
+      "2e256c3100fe7e90333d055994a9c09f5ec6d35bc7c9429acc2fd59de5226248": {
+        "activity_id": "2e256c3100fe7e90333d055994a9c09f5ec6d35bc7c9429acc2fd59de5226248",
+        "task_id": "01a063dd-d5e3-7451-abe0-2c62a22ac551",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "greg/codex",
+          "actor_kind": "agent"
+        },
+        "state": "finished",
+        "state_revision": 2,
+        "event_id": "1662e37729d89e3285be2ee0b70df7b24761583073792083669e99b405c8ce6f"
+      },
+      "8cbb897e70a3b298013e0b37febb31b13b9618b537f29cdaf13b55e79772fec4": {
+        "activity_id": "8cbb897e70a3b298013e0b37febb31b13b9618b537f29cdaf13b55e79772fec4",
+        "task_id": "01a063dd-d5e3-7451-abe0-2c62a22ac551",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "fable",
+          "actor_kind": "agent"
+        },
+        "state": "released",
+        "state_revision": 2,
+        "event_id": "5620f727420fa1c1df2bd13f400b09b37177834c8ba745ac4c14ae7a93f1cfe6"
+      }
+    }
+  }
+}

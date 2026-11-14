@@ -1,0 +1,53 @@
+{
+  "id": "01a09140-22a7-7fd2-978e-f6193f217a1d",
+  "external_ref": null,
+  "title": "Exercise the unclassified DaemonProxy fallback wiring through RunAsync",
+  "outcome": "A test reaches the actual generic pre-relay catch and verifies that retryable advice remains true while its unavailable MCP session is terminal and does not advertise session recovery.",
+  "acceptance": [
+    "A focused test drives DaemonProxy.RunAsync into a non-typed pre-relay exception and asserts daemon_proxy_failed, retryable:true, no shared-daemon-session-recovery feature and no in-session reconnect through the actual fallback wiring."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "task",
+  "priority": 3,
+  "labels": [
+    "architecture",
+    "daemon",
+    "mcp-contract",
+    "review",
+    "testing"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "completed",
+  "parent_id": null,
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": {
+    "summary": "Actual RunAsync catch/delegate wiring tested via deterministic malformed local lock path. Terminal server, retryable:true, no recovery feature across repeated calls, redaction and exit4 asserted. Adding reconnect delegate or reverting advice each failed new row; both mutants removed. Required cleanup child completed. Implemented and full-union reviewed; not committed or pushed.",
+    "completed_at": "2026-09-11T17:18:17.538350400Z",
+    "actor": {
+      "actor_id": "greg/codex",
+      "actor_kind": "agent"
+    }
+  },
+  "activity": {
+    "central": {
+      "6647effa26004085f37d0888977f44f13fa0de111e5a0c3c5c0a5a52ef00abf7": {
+        "activity_id": "6647effa26004085f37d0888977f44f13fa0de111e5a0c3c5c0a5a52ef00abf7",
+        "task_id": "01a09140-22a7-7fd2-978e-f6193f217a1d",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "greg/codex",
+          "actor_kind": "agent"
+        },
+        "state": "finished",
+        "state_revision": 2,
+        "event_id": "b63e3b556a6d76ab8a866c048f23fc363fc56aaa30cb50f314aca8a0e33a4ee9"
+      }
+    }
+  }
+}

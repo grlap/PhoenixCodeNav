@@ -1,0 +1,63 @@
+{
+  "id": "01a092d5-a29d-7320-a04a-dfb036492ece",
+  "external_ref": null,
+  "title": "Restore classifier and modifier capability claims while retaining F# attribution reserve",
+  "outcome": "Existing classifier and modifier summaries retain every established claim; all F# per-field IDs remain within the unchanged 2 KiB manifest reserve.",
+  "acceptance": [
+    "CompactedLegacyCapabilitySummariesRetainTheirClaims passes without changing its assertions; CapabilitiesDynamicTextUsesExactUtf8BoundaryAndReportsTruncation and RecoveryPolicyIsDiscoverableInHealthyAndUnavailableManifestsWithoutPromisingRecovery pass; the full solution suite passes."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "bug",
+  "priority": 2,
+  "labels": [
+    "mcp-contract",
+    "review",
+    "testing"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "completed",
+  "parent_id": "01a06ec3-2b25-79a0-bc69-89d0d8974a3d",
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": {
+    "summary": "Published 4294b363770d85fda540a2265b79e51bc6196fcf; installed v0.12.109 at C:/tools/phoenix-pilot. Implementation and evidence verified: original classifier/modifier capability claims restored verbatim, decisive assertions unchanged, full suite green. Archived manifest is 63483 bytes at PID 89864; Fable same-DLL report is 63484 at PID 108652, margins 2053/2052 against unchanged reserve 2048.",
+    "completed_at": "2026-09-12T01:10:02.066304Z",
+    "actor": {
+      "actor_id": "greg/codex",
+      "actor_kind": "agent"
+    }
+  },
+  "activity": {
+    "central": {
+      "593a4b455a588322ccc3be31141a75f7e17b616de5791d3b5a0073ef00784f98": {
+        "activity_id": "593a4b455a588322ccc3be31141a75f7e17b616de5791d3b5a0073ef00784f98",
+        "task_id": "01a092d5-a29d-7320-a04a-dfb036492ece",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "greg/codex",
+          "actor_kind": "agent"
+        },
+        "state": "finished",
+        "state_revision": 2,
+        "event_id": "f53bb4df870876bf4fbe6a2e7623c76bdb447695f0d00c737e84bbabf430380f"
+      },
+      "ae737e35bd8bb0433eaac035dcea544c2be56ba7daf208d0e4fa1de43b1ed374": {
+        "activity_id": "ae737e35bd8bb0433eaac035dcea544c2be56ba7daf208d0e4fa1de43b1ed374",
+        "task_id": "01a092d5-a29d-7320-a04a-dfb036492ece",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "greg/codex",
+          "actor_kind": "agent"
+        },
+        "state": "released",
+        "state_revision": 2,
+        "event_id": "7133d4ff3ebfb5c9c7d6408fe5efc904d073a5176fd2a9198ae89ba58997d312"
+      }
+    }
+  }
+}

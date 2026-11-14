@@ -1,0 +1,24 @@
+{
+  "id": "01a07d7b-03ae-7b00-a3de-1bc9fdef64a9",
+  "external_ref": null,
+  "title": "CLAUDE.md states the TermAl surface cannot follow up a review child, but termal_followup_session exists",
+  "outcome": "CLAUDE.md states the TermAl surface cannot follow up a review child, but termal_followup_session exists",
+  "acceptance": [
+    "The review-system section of CLAUDE.md describes the actual follow-up constraint (completed, parent-scoped, child still present) instead of asserting that follow-up is impossible, and the correction is backed by an exercised follow-up or by a recorded refusal with its exact error and parent identity"
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "bug",
+  "priority": 2,
+  "labels": [],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "open",
+  "parent_id": null,
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": null
+}

@@ -1,0 +1,27 @@
+{
+  "id": "01a0739f-576e-7273-b71e-f4e7dc47babc",
+  "external_ref": null,
+  "title": "Attribute F# sample omissions caused by group trimming to the group budget",
+  "outcome": "sampleCoverage reasons distinguish direct sample-list trimming from samples omitted because their owning group was removed.",
+  "acceptance": [
+    "A group-trimmed references response reports fsharp.reference_groups_byte_budget or a dedicated stable cause for the corresponding sample omission."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "task",
+  "priority": 3,
+  "labels": [
+    "mcp-contract",
+    "review"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "open",
+  "parent_id": null,
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": null
+}

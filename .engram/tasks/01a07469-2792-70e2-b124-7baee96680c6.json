@@ -1,0 +1,31 @@
+{
+  "id": "01a07469-2792-70e2-b124-7baee96680c6",
+  "external_ref": null,
+  "title": "Close residual F# implementations contract and override-disclosure test gaps",
+  "outcome": "Close residual F# implementations contract and override-disclosure test gaps",
+  "acceptance": [
+    "A position on an .fsi-hidden override preserves resolvedFromOverride disclosure while still returning the correct implementations",
+    "F# implementations tests pin timing, isAbstract, retryRecommended, and retryHint fields on representative success and retryable partial responses",
+    "Regression evidence covers the implementation-side override lookup without changing exact compiler identity semantics"
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "task",
+  "priority": 3,
+  "labels": [
+    "fsharp",
+    "mcp-contract",
+    "review",
+    "testing"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "open",
+  "parent_id": null,
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": null
+}

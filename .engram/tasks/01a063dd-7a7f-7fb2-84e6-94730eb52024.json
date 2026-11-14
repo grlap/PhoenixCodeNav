@@ -1,0 +1,48 @@
+{
+  "id": "01a063dd-7a7f-7fb2-84e6-94730eb52024",
+  "external_ref": null,
+  "title": "Pin compiler-exact results beside a paired base/.Net C# project family with differing DefineConstants",
+  "outcome": "A decisive C# regression proves that an established paired base/.Net project family (same AssemblyName, same linked source file, different DefineConstants) keeps implementations, type_hiera...",
+  "acceptance": [
+    "A C# fixture exists with two csproj sharing AssemblyName and a linked source file but differing DefineConstants, plus a clean target interface/base type declared beside that family",
+    "Reintroduction-verified: temporarily gating exactness on a per-project option fingerprint makes the test fail for the intended reason, and it passes after restoration",
+    "Release build at 0 warnings and the full suite pass",
+    "implementations and type_hierarchy for the clean target return confidence exact, partial=false, and no project_model_unproven on a settled index",
+    "references for the same target return exact, non-partial results"
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "task",
+  "priority": 2,
+  "labels": [
+    "regression-pin",
+    "semantic",
+    "testing"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "open",
+  "parent_id": "01a063dd-7906-7dd3-a2f3-901b1eaec5d6",
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": null,
+  "activity": {
+    "central": {
+      "9b015467e77b91ec9c4a8d4248943ea0ccb7fdbd24802612180a42e426051310": {
+        "activity_id": "9b015467e77b91ec9c4a8d4248943ea0ccb7fdbd24802612180a42e426051310",
+        "task_id": "01a063dd-7a7f-7fb2-84e6-94730eb52024",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "fable",
+          "actor_kind": "agent"
+        },
+        "state": "released",
+        "state_revision": 2,
+        "event_id": "bffc3a2e85e9e56437b3aca9ee225a15739ce6840132340cf926d4b9c2838faf"
+      }
+    }
+  }
+}

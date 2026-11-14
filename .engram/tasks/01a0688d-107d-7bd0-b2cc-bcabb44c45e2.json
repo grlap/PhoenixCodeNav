@@ -1,0 +1,53 @@
+{
+  "id": "01a0688d-107d-7bd0-b2cc-bcabb44c45e2",
+  "external_ref": null,
+  "title": "Bundle third-party licenses and notices in Phoenix distributions",
+  "outcome": "Every Phoenix binary distribution includes accurate first-party terms and the required third-party license and notice material.",
+  "acceptance": [
+    "A decisive automated contract test fails when required license or notice payloads are missing from publish output.",
+    "A generated or maintained third-party notice inventory covers the exact production NuGet closure, the platform .NET runtime payload, MCP C# SDK notices, and SQLitePCLRaw NOTICE content.",
+    "Self-contained and framework-dependent publish outputs contain the applicable Phoenix license or use terms plus third-party notices."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "task",
+  "priority": 1,
+  "labels": [
+    "compliance",
+    "distribution",
+    "licensing"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "completed",
+  "parent_id": "01a063dd-6801-7a90-a844-141790985837",
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": {
+    "summary": "Bundled PhoenixCodeNav Apache-2.0 licensing, exact third-party notices, runtime-pack legal files, and decisive source/publish contract tests.",
+    "completed_at": "2026-09-03T19:06:43.718997300Z",
+    "actor": {
+      "actor_id": "termal",
+      "actor_kind": "agent"
+    }
+  },
+  "activity": {
+    "central": {
+      "35f64d05404dad0cbd017447c1369c3689bb8babc69ec239b57eddb5229c696a": {
+        "activity_id": "35f64d05404dad0cbd017447c1369c3689bb8babc69ec239b57eddb5229c696a",
+        "task_id": "01a0688d-107d-7bd0-b2cc-bcabb44c45e2",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "termal",
+          "actor_kind": "agent"
+        },
+        "state": "finished",
+        "state_revision": 2,
+        "event_id": "bacb27feacbc1f2188bb75519af3feb3f49432e192b14bca6a49d824fdf842e0"
+      }
+    }
+  }
+}

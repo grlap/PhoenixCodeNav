@@ -1,0 +1,54 @@
+{
+  "id": "01a07a6a-32e6-7943-bf3e-6738dfde0852",
+  "external_ref": null,
+  "title": "Make Batch41 worktree strict-delete evidence reachable before tolerant cleanup",
+  "outcome": "Make Batch41 worktree strict-delete evidence reachable before tolerant cleanup",
+  "acceptance": [
+    "Each affected worktree success path performs a decisive zero-retry deletion check before any tolerant deletion can mask delayed handle release.",
+    "Independently owned worktree database pools are explicitly released where needed.",
+    "The focused Batch41 tests and full quality gates pass."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "bug",
+  "priority": 2,
+  "labels": [
+    "infrastructure",
+    "review",
+    "temp-cleanup",
+    "testing"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "completed",
+  "parent_id": "01a078ae-bdca-7b30-a846-3887ea1da0de",
+  "child_requirement": "optional",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": {
+    "summary": "Removed all five dead post-CleanupWorktree strict branches. Each affected test now strict-deletes and asserts the relevant Phoenix-owned index directories before tolerant Git worktree/repository cleanup; direct worktree/sibling pools are explicitly cleared where test-owned.",
+    "completed_at": "2026-09-07T06:03:47.688042300Z",
+    "actor": {
+      "actor_id": "greg/codex",
+      "actor_kind": "agent"
+    }
+  },
+  "activity": {
+    "central": {
+      "3a820433281de0a0800fbc6c30c5537374bd55fcdfe4ec86768470359dde41f9": {
+        "activity_id": "3a820433281de0a0800fbc6c30c5537374bd55fcdfe4ec86768470359dde41f9",
+        "task_id": "01a07a6a-32e6-7943-bf3e-6738dfde0852",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "greg/codex",
+          "actor_kind": "agent"
+        },
+        "state": "finished",
+        "state_revision": 2,
+        "event_id": "7217f0fd2fbe4fcb3e6cda90ffe497071e8e1ca70c69c56641b0bf857229ca4f"
+      }
+    }
+  }
+}

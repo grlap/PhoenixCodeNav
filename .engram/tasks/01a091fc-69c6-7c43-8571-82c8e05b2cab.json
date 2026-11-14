@@ -1,0 +1,52 @@
+{
+  "id": "01a091fc-69c6-7c43-8571-82c8e05b2cab",
+  "external_ref": null,
+  "title": "Align the remaining daemon shutdown paragraph with the actual retirement order",
+  "outcome": "The design document describes daemon shutdown consistently with DaemonServer.RunAsync.",
+  "acceptance": [
+    "The final-shutdown paragraph states endpoint removal, admitted-request drain, semantic/index disposal with writer-lease release, then own-descriptor removal"
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "task",
+  "priority": 2,
+  "labels": [
+    "architecture",
+    "documentation",
+    "mcp-contract",
+    "review"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "completed",
+  "parent_id": null,
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": {
+    "summary": "Published corrected daemon shutdown and writer-refusal documentation in e62cd7d44e3a825f970a7186707b663b5d2669e1; both original reviewers verified the final text.",
+    "completed_at": "2026-09-11T22:50:17.698560800Z",
+    "actor": {
+      "actor_id": "greg/codex",
+      "actor_kind": "agent"
+    }
+  },
+  "activity": {
+    "central": {
+      "f21df8809f95ef04a5153a261149ffb2597254c9fefd6f677cc7240777039aac": {
+        "activity_id": "f21df8809f95ef04a5153a261149ffb2597254c9fefd6f677cc7240777039aac",
+        "task_id": "01a091fc-69c6-7c43-8571-82c8e05b2cab",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "greg/codex",
+          "actor_kind": "agent"
+        },
+        "state": "finished",
+        "state_revision": 2,
+        "event_id": "a97ebeef304eb087a256d2109ced9df9bc34d744177326f3f21e738dff163224"
+      }
+    }
+  }
+}

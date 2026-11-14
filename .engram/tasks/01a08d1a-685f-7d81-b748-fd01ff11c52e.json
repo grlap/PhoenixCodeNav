@@ -1,0 +1,50 @@
+{
+  "id": "01a08d1a-685f-7d81-b748-fd01ff11c52e",
+  "external_ref": null,
+  "title": "Publish reviewed shared Simple Low fixes",
+  "outcome": "Publish reviewed shared Simple Low fixes",
+  "acceptance": [
+    "The reviewed seven-path changeset is committed on main and normally pushed to origin/main; remote equality and clean worktree are verified, and publication evidence is recorded on the completed implementation items."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "chore",
+  "priority": 3,
+  "labels": [
+    "publication",
+    "review"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "completed",
+  "parent_id": null,
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": {
+    "summary": "Committed the reviewed seven-path union as 1fd8f0b2ccfeddd70506f8170d5aa011c8cd7d63, normally pushed main to origin, verified ls-remote equality and clean worktree, and appended publication evidence to completed implementation items. Explicit user authorization consumed for this batch.",
+    "completed_at": "2026-09-10T20:56:04.515487200Z",
+    "actor": {
+      "actor_id": "greg/codex",
+      "actor_kind": "agent"
+    }
+  },
+  "activity": {
+    "central": {
+      "c02c6ba1c6c2156b49f632aacfcc1f5cca2b9f798f8a8cd90274da6c6402b42a": {
+        "activity_id": "c02c6ba1c6c2156b49f632aacfcc1f5cca2b9f798f8a8cd90274da6c6402b42a",
+        "task_id": "01a08d1a-685f-7d81-b748-fd01ff11c52e",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "greg/codex",
+          "actor_kind": "agent"
+        },
+        "state": "finished",
+        "state_revision": 2,
+        "event_id": "267629228b9abd621f816854d271ca10369593f4f06f1d8c669b376866464d7b"
+      }
+    }
+  }
+}

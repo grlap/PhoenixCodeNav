@@ -1,0 +1,50 @@
+{
+  "id": "01a088a3-861a-7283-9ffe-76d05cd33aae",
+  "external_ref": null,
+  "title": "Rebind workspace_root before sibling-worktree reconcile refresh",
+  "outcome": "Rebind workspace_root before sibling-worktree reconcile refresh",
+  "acceptance": [
+    "Suggested fix: rebind workspace_root before RefreshWithTransientRetries, or thread publishedWorkspaceRoot: target.WorkspacePath through DeltaRefresher.Refresh into MsBuildExistsCapture.Refresh, and add a worktree-seed regression test. Reproduction: Reasoned, not reproduced - exercising index_worktree requires creating a Git worktree, which reviewer mode forbids."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "bug",
+  "priority": 2,
+  "labels": [
+    "index-freshness",
+    "review"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "completed",
+  "parent_id": null,
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": {
+    "summary": "Worktree publication root and complete Exists recapture committed transactionally; Windows/Linux regression and original-reviewer verification pass.",
+    "completed_at": "2026-09-10T00:47:20.886379700Z",
+    "actor": {
+      "actor_id": "greg/codex",
+      "actor_kind": "agent"
+    }
+  },
+  "activity": {
+    "central": {
+      "0d88173315eaddd19cc15148a6d43730b7500d469609044c8a9ea28e646e1e14": {
+        "activity_id": "0d88173315eaddd19cc15148a6d43730b7500d469609044c8a9ea28e646e1e14",
+        "task_id": "01a088a3-861a-7283-9ffe-76d05cd33aae",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "greg/codex",
+          "actor_kind": "agent"
+        },
+        "state": "finished",
+        "state_revision": 2,
+        "event_id": "de6580a498f8cc93e3c038cfe5dbb4df2586dafbe1f1ba076feff1fa99bb95a9"
+      }
+    }
+  }
+}

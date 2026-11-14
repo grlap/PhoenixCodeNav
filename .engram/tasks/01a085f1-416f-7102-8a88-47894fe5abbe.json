@@ -1,0 +1,29 @@
+{
+  "id": "01a085f1-416f-7102-8a88-47894fe5abbe",
+  "external_ref": null,
+  "title": "Audit and enforce shared package evaluator boundary invariants",
+  "outcome": "Audit and enforce shared package evaluator boundary invariants",
+  "acceptance": [
+    "Audit ownership of compile versus restore projection, diagnostic precedence, positional helper versus final-property expansion, and normalization across repeated expansion calls; distinguish current guarantees from reproduced defects and dormant hazards.",
+    "Propose a bounded design that makes positional callbacks and normalized package identities explicit at the shared evaluator boundary, linking existing follow-ups without duplicating them; obtain an independent design opinion before implementation."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "research",
+  "priority": 3,
+  "labels": [
+    "architecture",
+    "review",
+    "shared-packages"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "open",
+  "parent_id": "01a063dd-5401-7f73-a63d-bea317b25710",
+  "child_requirement": "optional",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": null
+}

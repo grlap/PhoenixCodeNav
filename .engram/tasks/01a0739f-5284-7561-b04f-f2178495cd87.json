@@ -1,0 +1,27 @@
+{
+  "id": "01a0739f-5284-7561-b04f-f2178495cd87",
+  "external_ref": null,
+  "title": "Reuse FCS checking across workspace-dependent F# reference scans",
+  "outcome": "A workspace-dependent references request avoids recreating checkers and rechecking shared closure nodes for every dependent context.",
+  "acceptance": [
+    "A decisive performance contract shows shared closure nodes are checked once per request and warm semantic state is not evicted by a multi-dependent scan."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "task",
+  "priority": 2,
+  "labels": [
+    "performance",
+    "review"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "open",
+  "parent_id": null,
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": null
+}

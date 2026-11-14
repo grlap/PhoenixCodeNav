@@ -1,0 +1,54 @@
+{
+  "id": "01a091fc-664e-7390-a9e9-d3a4583ea876",
+  "external_ref": null,
+  "title": "Cover DaemonProxy retirement catch wiring for both stable takeover causes",
+  "outcome": "Regression coverage proves the proxy catch wiring preserves both typed retirement causes through the unavailable shim.",
+  "acceptance": [
+    "A test drives the proxy retirement path for daemon_takeover_timeout",
+    "A test drives the proxy retirement path for daemon_writer_lease_unverifiable",
+    "Both tests assert the resulting DaemonProxyFailureException cause and retryability"
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "task",
+  "priority": 3,
+  "labels": [
+    "review",
+    "testing"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "completed",
+  "parent_id": null,
+  "child_requirement": "required",
+  "prerequisites": [
+    "01a0921e-1055-7a12-b6fd-f6c484b2dccd"
+  ],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": {
+    "summary": "Published actual DaemonProxy retirement catch coverage in e62cd7d44e3a825f970a7186707b663b5d2669e1; both typed causes and caller cancellation verified.",
+    "completed_at": "2026-09-11T22:50:17.646463700Z",
+    "actor": {
+      "actor_id": "greg/codex",
+      "actor_kind": "agent"
+    }
+  },
+  "activity": {
+    "central": {
+      "c344cad3e912c02db4583f957a88f334d0a0017014d036a69f22b9eefac830b7": {
+        "activity_id": "c344cad3e912c02db4583f957a88f334d0a0017014d036a69f22b9eefac830b7",
+        "task_id": "01a091fc-664e-7390-a9e9-d3a4583ea876",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "greg/codex",
+          "actor_kind": "agent"
+        },
+        "state": "finished",
+        "state_revision": 2,
+        "event_id": "3e353ef106e99b06c3ca847c5b7ee9b6ef064e84ed7de93c3f2392f6aa1f124a"
+      }
+    }
+  }
+}

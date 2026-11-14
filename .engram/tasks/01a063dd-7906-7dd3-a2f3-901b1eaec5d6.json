@@ -1,0 +1,40 @@
+{
+  "id": "01a063dd-7906-7dd3-a2f3-901b1eaec5d6",
+  "external_ref": null,
+  "title": "Scope FindImplementations/FindDerivedClasses to index-derived candidate projects (48s query to candidate-bounded)",
+  "outcome": "Scope FindImplementations/FindDerivedClasses to index-derived candidate projects (48s query to candidate-bounded)",
+  "acceptance": [
+    "Scope FindImplementations/FindDerivedClasses to index-derived candidate projects (48s query to candidate-bounded) is done"
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "task",
+  "priority": 1,
+  "labels": [],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "open",
+  "parent_id": null,
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": null,
+  "activity": {
+    "central": {
+      "2c5c6907029d914e121b49d32ecb19ebf9e9865925e489ae0999e815d014e295": {
+        "activity_id": "2c5c6907029d914e121b49d32ecb19ebf9e9865925e489ae0999e815d014e295",
+        "task_id": "01a063dd-7906-7dd3-a2f3-901b1eaec5d6",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "fable",
+          "actor_kind": "agent"
+        },
+        "state": "released",
+        "state_revision": 2,
+        "event_id": "e1a326e9a87fbdf9e9cf57da28053b85f39fe1108a5ff8688bbbabf6fa0b9e7f"
+      }
+    }
+  }
+}

@@ -1,0 +1,50 @@
+{
+  "id": "01a07070-df75-75d0-a386-4114d0968e24",
+  "external_ref": null,
+  "title": "Preserve reference handle precedence over accompanying F# paths",
+  "outcome": "Reference selector precedence is preserved across mixed-language arguments.",
+  "acceptance": [
+    "A valid C# symbolId with an accompanying F# path behaves like the handle alone, while F# positional routing and unsupported F# paths remain honest."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "bug",
+  "priority": 1,
+  "labels": [
+    "mcp-contract",
+    "review"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "completed",
+  "parent_id": "01a063dd-54f4-7d22-8647-caeefe63e36e",
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": {
+    "summary": "Restored canonical References selector ordering and added decisive mixed-language regression coverage.",
+    "completed_at": "2026-09-05T07:42:31.214958400Z",
+    "actor": {
+      "actor_id": "greg/codex",
+      "actor_kind": "agent"
+    }
+  },
+  "activity": {
+    "central": {
+      "35a286e5fb296f3b439edac941d5b53df7745be90bcfa24048d49b750897e3f8": {
+        "activity_id": "35a286e5fb296f3b439edac941d5b53df7745be90bcfa24048d49b750897e3f8",
+        "task_id": "01a07070-df75-75d0-a386-4114d0968e24",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "greg/codex",
+          "actor_kind": "agent"
+        },
+        "state": "finished",
+        "state_revision": 2,
+        "event_id": "326272545a1962cc78eddc150809db12ad15bdaa10f830d1df56ff6e718be127"
+      }
+    }
+  }
+}

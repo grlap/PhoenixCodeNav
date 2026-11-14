@@ -1,0 +1,40 @@
+{
+  "id": "01a063dd-629d-7fe1-b16f-c8809d74d1f4",
+  "external_ref": null,
+  "title": "Investigate residual semantic cold-start floor and warm reload work",
+  "outcome": "Investigate residual semantic cold-start floor and warm reload work",
+  "acceptance": [
+    "Investigate residual semantic cold-start floor and warm reload work is done"
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "task",
+  "priority": 1,
+  "labels": [],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "open",
+  "parent_id": "01a063dd-5c87-7403-9486-fddc946bf93b",
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": null,
+  "activity": {
+    "central": {
+      "a2fc94b92319334abd244836671376af548fe057d854949a7ac0fb542b9208d4": {
+        "activity_id": "a2fc94b92319334abd244836671376af548fe057d854949a7ac0fb542b9208d4",
+        "task_id": "01a063dd-629d-7fe1-b16f-c8809d74d1f4",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "fable",
+          "actor_kind": "agent"
+        },
+        "state": "released",
+        "state_revision": 2,
+        "event_id": "9fe0ae877a0c096caeee59d316bb0e5e4d5388e7e9d78b5728a417f8e16c38de"
+      }
+    }
+  }
+}

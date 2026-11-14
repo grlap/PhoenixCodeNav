@@ -1,0 +1,47 @@
+{
+  "id": "01a063dd-8ce6-7512-af26-59df9cfe8be2",
+  "external_ref": null,
+  "title": "Add dependency-direction aliases for agents",
+  "outcome": "Agents can use dependencies and dependents while established upstream and downstream callers remain fully compatible.",
+  "acceptance": [
+    "Direction parsing accepts dependencies as the documented alias for the existing canonical direction and dependents for its opposite.",
+    "Existing argument names and behavior remain unchanged.",
+    "Responses echo the canonical upstream or downstream value.",
+    "The capability is represented by its own features[] identifier and BuildInfo.Version is bumped."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "feature",
+  "priority": 3,
+  "labels": [
+    "agent-experience",
+    "mcp-contract",
+    "navigation"
+  ],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "open",
+  "parent_id": null,
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": null,
+  "activity": {
+    "central": {
+      "fa83b0e06e09c80af883b6bc8c90e8a500ab77295022a70f6a01fe454e739216": {
+        "activity_id": "fa83b0e06e09c80af883b6bc8c90e8a500ab77295022a70f6a01fe454e739216",
+        "task_id": "01a063dd-8ce6-7512-af26-59df9cfe8be2",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "fable",
+          "actor_kind": "agent"
+        },
+        "state": "released",
+        "state_revision": 2,
+        "event_id": "ce127f217082c5bb446984dddf28306e9ec3dae604f66f7567738fe2c0d92696"
+      }
+    }
+  }
+}

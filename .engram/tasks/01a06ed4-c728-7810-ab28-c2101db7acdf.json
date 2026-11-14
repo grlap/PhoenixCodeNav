@@ -1,0 +1,60 @@
+{
+  "id": "01a06ed4-c728-7810-ab28-c2101db7acdf",
+  "external_ref": null,
+  "title": "Fence F# semantic operation telemetry with same-stream markers and a duplicate-emission control",
+  "outcome": "F# semantic operation assertions observe completed TelemetryLog writes deterministically and detect missing, duplicate or C#-shaped records under delayed writer scheduling.",
+  "acceptance": [
+    "A temporary omitted-emission mutant and a temporary extra F# emission before call return both make the test fail after the later FIFO marker is observed; a C#-shaped field mutant also fails. Final implementation passes with experimental changes removed.",
+    "For the tested F# call, exactly one F#-shaped semanticOp is observed between uniquely identified before/after markers in the same TelemetryLog JSONL stream; its immutable timing snapshot matches the response and no loss or truncation is accepted."
+  ],
+  "acceptance_bindings": [],
+  "evaluation_mode": null,
+  "kind": "task",
+  "priority": 1,
+  "labels": [],
+  "assigned_to": null,
+  "deferred_until": null,
+  "lifecycle": "completed",
+  "parent_id": "01a063dd-5c87-7403-9486-fddc946bf93b",
+  "child_requirement": "required",
+  "prerequisites": [],
+  "blockers": [],
+  "superseded_by": null,
+  "disposal_reason": null,
+  "completion": {
+    "summary": "Published 4294b363770d85fda540a2265b79e51bc6196fcf; installed v0.12.109 at C:/tools/phoenix-pilot. Implementation and evidence verified: same-stream FIFO markers assert exactly one F# semanticOp with the response's frozen timing; original omitted/duplicate/C#-shape controls discriminate. No new test execution during final procedural completion.",
+    "completed_at": "2026-09-12T01:10:01.855878700Z",
+    "actor": {
+      "actor_id": "greg/codex",
+      "actor_kind": "agent"
+    }
+  },
+  "activity": {
+    "central": {
+      "3c9c72763368a86975e9a7cacbfbdfeb300da5b4241cee292ac7d5baeeca7b6d": {
+        "activity_id": "3c9c72763368a86975e9a7cacbfbdfeb300da5b4241cee292ac7d5baeeca7b6d",
+        "task_id": "01a06ed4-c728-7810-ab28-c2101db7acdf",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "greg/codex",
+          "actor_kind": "agent"
+        },
+        "state": "finished",
+        "state_revision": 2,
+        "event_id": "5aa197f2ad1bfcecdd29d90239992b8fb35ac1d4c76a34a416bcdb720860f739"
+      },
+      "c4ea961970046295cbb8953cbaaa86824b29f9833c691b35cb00c69c417315e6": {
+        "activity_id": "c4ea961970046295cbb8953cbaaa86824b29f9833c691b35cb00c69c417315e6",
+        "task_id": "01a06ed4-c728-7810-ab28-c2101db7acdf",
+        "origin_machine": "central",
+        "actor": {
+          "actor_id": "greg/codex",
+          "actor_kind": "agent"
+        },
+        "state": "released",
+        "state_revision": 2,
+        "event_id": "9999d4cdcdb65e92728b3eff8d11db5ce329131d01d29bd940c66235b9acb195"
+      }
+    }
+  }
+}
